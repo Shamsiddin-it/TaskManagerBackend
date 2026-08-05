@@ -1,0 +1,68 @@
+# Development stack (TZ 32.1). Not for production — see docker-compose.prod.yml.
+#
+# Credentials here are local-only fixtures. Production secrets come from a secret manager and are
+# never committed (SEC-010).
+
+name: mentortaskflow
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: mentortaskflow
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      # Creates the three non-overlapping database roles of TZ 12.6: app, migrator, retention.
+      - ./scripts/db/01-roles.sql:/docker-entrypoint-initdb.d/01-roles.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d mentortaskflow"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # Local SMTP sink — no mail leaves the machine during development.
+  mailhog:
+    image: mailhog/mailhog:latest
+    ports:
+      - "1025:1025"
+      - "8025:8025"
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      ConnectionStrings__DefaultConnection: "Host=postgres;Port=5432;Database=mentortaskflow;Username=mentortaskflow_app;Password=mentortaskflow_dev"
+      Database__MigrateOnStartup: "true"
+      Cors__AllowedOrigins__0: "http://localhost:5173"
+    ports:
+      - "5000:8080"
+
+volumes:
+  postgres-data:
+  minio-data:
