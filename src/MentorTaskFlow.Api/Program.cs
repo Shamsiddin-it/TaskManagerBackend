@@ -4,6 +4,8 @@ using MentorTaskFlow.Api.Extensions;
 using MentorTaskFlow.Api.HealthChecks;
 using MentorTaskFlow.Api.Middleware;
 using MentorTaskFlow.Api.Options;
+using MentorTaskFlow.Api.Tenancy;
+using MentorTaskFlow.Application.Common.Tenancy;
 using MentorTaskFlow.Infrastructure;
 using MentorTaskFlow.Infrastructure.Options;
 using MentorTaskFlow.Infrastructure.Persistence;
@@ -89,6 +91,19 @@ builder.Services.AddCors(options =>
 });
 
 // ---------------------------------------------------------------------------
+// Tenancy (TZ 38.3). ICurrentUserContext comes from token claims; IBranchContext
+// is the effective scope computed per request by BranchContextMiddleware.
+// ---------------------------------------------------------------------------
+builder.Services.AddOptions<TenancyOptions>()
+    .Bind(builder.Configuration.GetSection(TenancyOptions.SectionName))
+    .ValidateOnStart();
+
+builder.Services.AddHttpContextAccessor();
+builder.Services.AddScoped<ICurrentUserAccessor, HttpCurrentUserAccessor>();
+builder.Services.AddScoped<RequestBranchContext>();
+builder.Services.AddScoped<IBranchContext>(sp => sp.GetRequiredService<RequestBranchContext>());
+
+// ---------------------------------------------------------------------------
 // HSTS (SEC-008) — max-age 31536000, includeSubDomains.
 // ---------------------------------------------------------------------------
 builder.Services.AddHsts(options =>
@@ -144,6 +159,15 @@ if (!isDevelopment)
 }
 
 app.UseCors(CorsOptions.PolicyName);
+
+// Authentication lands in Phase 2. Until then the middleware below sees no principal and leaves the
+// tenant filter fail-closed, which is the correct behaviour for an API with no data endpoints yet.
+app.UseAuthentication();
+app.UseAuthorization();
+
+// After authentication: the effective scope is derived from validated claims, never from the raw
+// request (TEN-030a).
+app.UseBranchContext();
 
 if (isDevelopment)
 {

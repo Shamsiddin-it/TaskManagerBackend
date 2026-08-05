@@ -33,6 +33,21 @@ public sealed class UnauthorizedException(string code = ErrorCodes.Unauthorized,
 public sealed class ForbiddenException(string code = ErrorCodes.Forbidden, string? detail = null)
     : AppException(code, detail ?? "Действие запрещено для текущей роли.");
 
+/// <summary>
+/// 400 <c>BRANCH_CONTEXT_REQUIRED</c>: an Organization Admin attempted a branch-scoped mutation
+/// without choosing a branch (<c>TEN-033</c>).
+/// </summary>
+/// <remarks>
+/// Deliberately not a <see cref="ValidationAppException"/>: nothing about the payload is wrong, so
+/// there is no field to report. The caller has the right to act — they have simply not said where,
+/// and no endpoint changes more than one branch per request, so there is no default to assume
+/// (<c>TEN-034</c>).
+/// </remarks>
+public sealed class BranchContextRequiredException()
+    : AppException(
+        ErrorCodes.BranchContextRequired,
+        "Не выбран филиал для операции. Передайте заголовок X-MTF-Branch-Id.");
+
 /// <summary>409. The caller may perform the action, but the current resource state forbids it (TZ 9.4).</summary>
 public sealed class ConflictException(string code, string? detail = null, IReadOnlyDictionary<string, object?>? details = null)
     : AppException(code, detail ?? "Текущее состояние ресурса не допускает операцию.", details);
