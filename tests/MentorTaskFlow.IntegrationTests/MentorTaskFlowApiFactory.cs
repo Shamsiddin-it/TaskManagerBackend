@@ -11,7 +11,8 @@ namespace MentorTaskFlow.IntegrationTests;
 /// <para>
 /// The environment stays <c>Development</c> so the pipeline under test matches the one developers
 /// run: HTTPS redirection and HSTS are off, and the test client is not answered with a 307 before
-/// reaching the endpoint.
+/// reaching the endpoint. It also keeps the auth cookies non-<c>Secure</c>, which is what lets the
+/// test client retain them over plain HTTP.
 /// </para>
 /// <para>
 /// <c>Database:MigrateOnStartup</c> is forced off: migrations are the responsibility of the tests
@@ -25,6 +26,17 @@ public sealed class MentorTaskFlowApiFactory : WebApplicationFactory<Program>
     private const string UnusedConnectionString =
         "Host=127.0.0.1;Port=1;Database=mentortaskflow_tests;Username=none;Password=none;Timeout=1";
 
+    /// <summary>
+    /// 60 characters — well over the 256-bit floor of <c>AUTH-001</c> — and free of the placeholder
+    /// words <c>AuthOptionsValidator</c> refuses to start on.
+    /// </summary>
+    public const string TestSigningKey = "mtf-integration-signing-key-0123456789-abcdefghijklmnopqrst";
+
+    public const string AllowedOrigin = "https://app.mentortaskflow.test";
+
+    /// <summary>Points the API at a live database when a test needs real persistence.</summary>
+    public string? ConnectionStringOverride { get; init; }
+
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         builder.UseEnvironment("Development");
@@ -33,9 +45,13 @@ public sealed class MentorTaskFlowApiFactory : WebApplicationFactory<Program>
         {
             configuration.AddInMemoryCollection(new Dictionary<string, string?>
             {
-                ["ConnectionStrings:DefaultConnection"] = UnusedConnectionString,
+                ["ConnectionStrings:DefaultConnection"] = ConnectionStringOverride ?? UnusedConnectionString,
                 ["Database:MigrateOnStartup"] = "false",
-                ["Cors:AllowedOrigins:0"] = "https://app.mentortaskflow.test",
+                ["Cors:AllowedOrigins:0"] = AllowedOrigin,
+                ["Auth:JwtSigningKey"] = TestSigningKey,
+                ["Auth:JwtIssuer"] = "mentortaskflow-tests",
+                ["Auth:JwtAudience"] = "mentortaskflow-tests-api",
+                ["Auth:AppBaseUrl"] = AllowedOrigin,
             });
         });
     }
