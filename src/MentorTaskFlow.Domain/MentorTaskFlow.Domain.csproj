@@ -1,0 +1,8 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Domain references nothing. Any ProjectReference or PackageReference added here
+    is an architecture violation and is rejected by TEST-SEC-023.
+  -->
+
+</Project>

@@ -1,0 +1,5 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Request/response DTOs only. References nothing. -->
+
+</Project>

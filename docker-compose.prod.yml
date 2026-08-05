@@ -1,0 +1,99 @@
+# Production-shaped deployment (TZ 32.2).
+#
+# Every value comes from the environment — nothing sensitive is committed (SEC-010, DEPLOY-014).
+# Copy .env.example to .env and fill it in before deploying.
+#
+# Deployment order per DEPLOY-029: backup (on a destructive migration) → mtf-migrator → mtf-api /
+# mtf-worker → smoke check of /health/ready.
+#
+# mtf-web (nginx serving the SPA, TZ 32.2) is absent: the frontend is out of scope for this
+# repository. It is added when the SPA exists.
+
+name: mentortaskflow-prod
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    volumes:
+      - minio-data:/data
+    restart: unless-stopped
+
+  # Runs once per deployment, then exits. Migrations are never applied by the API or the worker
+  # (DEPLOY-016): concurrent replicas would race for schema locks.
+  mtf-migrator:
+    image: ${MTF_IMAGE}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      ASPNETCORE_ENVIRONMENT: ${ASPNETCORE_ENVIRONMENT}
+      MTF_ROLE: migrator
+      ConnectionStrings__DefaultConnection: ${CONNECTION_STRING_MIGRATOR}
+      Database__MigrateOnStartup: "false"
+      BOOTSTRAP_ORGANIZATION_NAME: ${BOOTSTRAP_ORGANIZATION_NAME}
+      BOOTSTRAP_ORGANIZATION_SLUG: ${BOOTSTRAP_ORGANIZATION_SLUG}
+      BOOTSTRAP_HEAD_OFFICE_NAME: ${BOOTSTRAP_HEAD_OFFICE_NAME}
+      BOOTSTRAP_HEAD_OFFICE_CODE: ${BOOTSTRAP_HEAD_OFFICE_CODE}
+      BOOTSTRAP_HEAD_OFFICE_TIMEZONE: ${BOOTSTRAP_HEAD_OFFICE_TIMEZONE}
+      BOOTSTRAP_ADMIN_EMAIL: ${BOOTSTRAP_ADMIN_EMAIL}
+    restart: "no"
+
+  mtf-api:
+    image: ${MTF_IMAGE}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      ASPNETCORE_ENVIRONMENT: ${ASPNETCORE_ENVIRONMENT}
+      ConnectionStrings__DefaultConnection: ${CONNECTION_STRING_APP}
+      Database__MigrateOnStartup: "false"
+      # Hangfire processing belongs to mtf-worker only, so scaling the API never duplicates a job
+      # run (DEPLOY-013).
+      Hangfire__EnableServer: "false"
+      Cors__AllowedOrigins__0: ${CORS_ALLOWED_ORIGIN}
+      AUTH__JWT_SIGNING_KEY: ${AUTH_JWT_SIGNING_KEY}
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/health/live || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  mtf-worker:
+    image: ${MTF_IMAGE}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      ASPNETCORE_ENVIRONMENT: ${ASPNETCORE_ENVIRONMENT}
+      MTF_ROLE: worker
+      ConnectionStrings__DefaultConnection: ${CONNECTION_STRING_APP}
+      Database__MigrateOnStartup: "false"
+      Hangfire__EnableServer: "true"
+      AUTH__JWT_SIGNING_KEY: ${AUTH_JWT_SIGNING_KEY}
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
+  minio-data:

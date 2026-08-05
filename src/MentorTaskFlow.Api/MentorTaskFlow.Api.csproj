@@ -1,0 +1,34 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <UserSecretsId>mentortaskflow-api</UserSecretsId>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!--
+      OpenAPI is produced by Swashbuckle only. Microsoft.AspNetCore.OpenApi is deliberately absent:
+      its source generator targets the Microsoft.OpenApi 2.x object model, and 2.0.0 carries
+      GHSA-v5pm-xwqc-g5wc (High), which SEC-014 forbids shipping. Pinning Microsoft.OpenApi to a
+      patched 3.x breaks that generator, so the package is dropped rather than the pin relaxed.
+    -->
+    <PackageReference Include="Microsoft.OpenApi" />
+    <PackageReference Include="Swashbuckle.AspNetCore" />
+    <PackageReference Include="Serilog.AspNetCore" />
+    <PackageReference Include="AspNetCore.HealthChecks.NpgSql" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\MentorTaskFlow.Application\MentorTaskFlow.Application.csproj" />
+    <ProjectReference Include="..\MentorTaskFlow.Infrastructure\MentorTaskFlow.Infrastructure.csproj" />
+    <ProjectReference Include="..\MentorTaskFlow.Contracts\MentorTaskFlow.Contracts.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="MentorTaskFlow.IntegrationTests" />
+  </ItemGroup>
+
+</Project>
