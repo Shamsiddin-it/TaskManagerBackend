@@ -19,6 +19,7 @@
 | 5 | Hangfire | **Сохраняем.** Проверено на фазе 0: `Hangfire.AspNetCore 1.8.24` + `Hangfire.PostgreSql 1.21.1` собираются на `net10.0`. Обязателен пин `Newtonsoft.Json ≥ 13.0.4` — транзитивно тянется уязвимая 11.0.1 | [ADR-002](./docs/ADR-002-background-job-scheduler.md) |
 | 6 | `ADR-001-organization-branch-isolation.md`, `MentorTaskFlow_TZ_v2.2_AUDIT.md` | **Получены и прочитаны** (05.08.2026). Подтверждают план; режим миграции — A (новая БД) | ADR-001 §5 |
 | 7 | `Microsoft.AspNetCore.OpenApi` | **Не используется.** OpenAPI генерируется только Swashbuckle | Его source-generator рассчитан на объектную модель Microsoft.OpenApi 2.x, а 2.0.0 несёт GHSA-v5pm-xwqc-g5wc (High). Пин на исправленную 3.x ломает генератор — пакет убран, а не порог аудита ослаблен (`SEC-014`) |
+| 8 | `Category.Name` — «3–50 символов» (10.2) | **Минимум снижен до 2.** Верхняя граница 50 и `varchar(50)` сохранены | **Противоречие внутри ТЗ.** Раздел 2 перечисляет направления как «C#, Python, Go, Frontend, Design», фикстура тестов изоляции 31.9 построена на категории `C#`. `C#` и `Go` — 2 символа. С минимумом 3 система не может смоделировать собственный пример. Требует подтверждения заказчика |
 
 **Проверка перед стартом (фаза 0):** ТЗ ссылается на разделы 24–25, 28–31, Приложения A/B/G–K/N — они прочитаны частично. Перед каждой фазой соответствующие разделы вычитываются полностью; расхождения с этим планом фиксируются в PR.
 
@@ -151,11 +152,16 @@ PR:      в main, мержит заказчик
 - `xmin` concurrency token: маппинг + Base64Url-кодек + 409 `CONCURRENCY_CONFLICT` с `currentConcurrencyToken` (11.6, `API-026`).
 - Первая миграция.
 
-**Тесты:**
-- Arch: `TEST-SEC-021` (каждый handler tenant-scoped сущности содержит явный scope-фильтр), `TEST-SEC-022` (нет обращений к `DbSet<T>` вне репозитория, кроме зарегистрированного списка исключений).
-- Integration: `TEST-TEN-001`…`TEST-TEN-013`, `TEST-TEN-040` (прямые INSERT/UPDATE в обход приложения → отказ на уровне PostgreSQL).
+**Уточнение состава по итогам реализации.** Фаза 1 создаёт также таблицы `Category` и `CategorySettings` — без единого endpoint'а и без бизнес-правил (они в фазе 5). Причина: composite FK `fk_users_category_scope` (`USER-024`) и `fk_user_category_history_scope` ссылаются на `categories`. Отложить их означало бы оставить `User.CategoryId` без FK до фазы 5 — ровно тот постфактум-scope, который запрещает `TEN-019`.
 
-**Готово когда:** cross-branch связь физически невозможна на уровне БД, подтверждено `TEST-TEN-040`.
+**Тесты:**
+- Arch: `TEST-SEC-031` (DbContext не покидает Infrastructure), immutability scope-полей, отсутствие concurrency token у append-only сущностей.
+- Integration (Testcontainers PostgreSQL): `TEST-TEN-031`, `TEST-TEN-032`, `TEST-DB-010`, часть `TEST-TEN-040` — composite FK, существующие после фазы 1; фильтры запросов (`TEST-TEN-002`, `TEST-TEN-003`, `TEST-TEN-008`, `TEST-TEN-010`).
+- Middleware: `TEST-TEN-007`, `TEST-TEN-012`, `TEST-TEN-013`.
+
+> `TEST-TEN-001`…`TEST-TEN-006`, `TEST-TEN-009`, `TEST-TEN-011` требуют endpoint'ов и закрываются в фазах 4–6 вместе с ними. Оставшиеся 15 composite FK из `TEST-TEN-040` добавляются в фазах, создающих свои таблицы (DoD 3a).
+
+**Готово когда:** cross-branch связь физически невозможна на уровне БД, подтверждено прямыми INSERT в обход приложения.
 
 ---
 
@@ -216,8 +222,23 @@ PR:      в main, мержит заказчик
 
 ---
 
-### Фаза 5 — Users management
-`claude/phase-5-users` · ТЗ 15.1, 39.5
+### Фаза 5 — Categories & CategorySettings
+`claude/phase-5-categories` · ТЗ 15.3, 39.4
+
+> **Переставлена местами с Users** относительно первой редакции плана. Lead и Mentor обязаны иметь `CategoryId` (`USER-023`), а composite FK `fk_users_category_scope` требует существующей записи в `categories`. Создавать пользователей раньше категорий невозможно.
+
+**Состав:**
+- CRUD Category; уникальность `UNIQUE (branch_id, normalized_name)` — **не глобальная** (`CAT-021`).
+- `CategorySettings` создаётся в одной транзакции с Category; `TimeZoneId` наследуется от `Branch.TimeZoneId` (`CAT-014`, `CAT-023`).
+- `DefaultDueTimeLocal` (default `23:59`), `DefaultAssignmentDueDays` 1–60, `DeadlineReminderHours` 1–168, `AllowLateSubmission`.
+- `activate` / `deactivate` + `confirmActiveUsers` (`CAT-003`).
+- Правила `CAT-015` (изменение настроек не пересчитывает существующие дедлайны) и `CAT-016` (`AllowLateSubmission` действует немедленно).
+- `X-MTF-Branch-Id` обязателен для OA при `POST /categories` (`CAT-025`).
+
+---
+
+### Фаза 6 — Users management
+`claude/phase-6-users` · ТЗ 15.1, 39.5
 
 **Состав:**
 - `GET /users`, `GET /users/{id}`, `POST /users`, `PATCH /users/{id}`.
@@ -229,19 +250,6 @@ PR:      в main, мержит заказчик
 - Уведомления `CategoryWithoutLead`, `BranchWithoutAdmin` — enqueue в Outbox (`USER-005`, `USER-036`).
 
 **Отложено:** `change-category` и `change-branch` — фаза 9 (блокировки зависят от Assignment).
-
----
-
-### Фаза 6 — Categories & CategorySettings
-`claude/phase-6-categories` · ТЗ 15.3, 39.4
-
-**Состав:**
-- CRUD Category; уникальность `UNIQUE (branch_id, normalized_name)` — **не глобальная** (`CAT-021`).
-- `CategorySettings` создаётся в одной транзакции с Category; `TimeZoneId` наследуется от `Branch.TimeZoneId` (`CAT-014`, `CAT-023`).
-- `DefaultDueTimeLocal` (default `23:59`), `DefaultAssignmentDueDays` 1–60, `DeadlineReminderHours` 1–168, `AllowLateSubmission`.
-- `activate` / `deactivate` + `confirmActiveUsers` (`CAT-003`).
-- Правила `CAT-015` (изменение настроек не пересчитывает существующие дедлайны) и `CAT-016` (`AllowLateSubmission` действует немедленно).
-- `X-MTF-Branch-Id` обязателен для OA при `POST /categories` (`CAT-025`).
 
 ---
 
@@ -437,10 +445,10 @@ PR:      в main, мержит заказчик
 0 Foundation
 └─ 1 Tenancy ⚠ блокирующая (TEN-019)
    └─ 2 Identity ─ 3 Authz/Audit/Outbox-схема
-      ├─ 4 Branches
-      ├─ 5 Users
-      └─ 6 Categories
-         └─ 7 Schedule
+      └─ 4 Branches
+         └─ 5 Categories
+            └─ 6 Users
+               └─ 7 Schedule
             └─ 8 Assignment + TaskEvent
                ├─ 9 User transfers
                ├─ 10 Submissions ─ 11 Review
@@ -487,3 +495,4 @@ PR:      в main, мержит заказчик
 | 3 | Hangfire vs собственный планировщик | ✅ Hangfire, [ADR-002](./docs/ADR-002-background-job-scheduler.md) | — |
 | 4 | Домен для `app.<domain>` / `api.<domain>` | ⏳ Домена пока нет | Фаза 2. Не блокирует: cookie host-only (`Domain` не выставляется, `AUTH-010`), CORS и ссылки в письмах — из конфигурации. Домен подставляется при деплое одной переменной |
 | 5 | Anthropic API key и бюджет | ⏳ Открыт | Фаза 16. До ответа реализуется провайдер + заглушка за feature flag `Features:AiSummary` |
+| 6 | **Минимальная длина `Category.Name`** | ⏳ Требует решения | Раздел 10.2 требует 3–50, но раздел 2 и фикстура 31.9 используют `C#` и `Go` (2 символа). Реализовано с минимумом **2**; если заказчик подтвердит 3, придётся переименовать категории в примерах ТЗ и в тестовой фикстуре |

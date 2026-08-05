@@ -1,5 +1,7 @@
 using MentorTaskFlow.Application.Common.Abstractions;
+using MentorTaskFlow.Application.Common.Tenancy;
 using MentorTaskFlow.Infrastructure.Common;
+using MentorTaskFlow.Infrastructure.Observability;
 using MentorTaskFlow.Infrastructure.Options;
 using MentorTaskFlow.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
@@ -52,6 +54,14 @@ public static class InfrastructureServiceCollectionExtensions
         });
 
         services.AddSingleton<IClock, SystemClock>();
+
+        // Scoped: the tenant scope belongs to one request (or to one system-task scope) and must
+        // never outlive it. Registered before the DbContext consumes it.
+        services.AddScoped<TenantFilterState>();
+        services.AddScoped<IBranchScopeValidator, BranchScopeValidator>();
+
+        services.AddMetrics();
+        services.AddSingleton<TenancyMetrics>();
 
         return services;
     }

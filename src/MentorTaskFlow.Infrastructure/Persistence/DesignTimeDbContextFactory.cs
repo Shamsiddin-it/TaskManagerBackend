@@ -24,6 +24,11 @@ public sealed class DesignTimeDbContextFactory : IDesignTimeDbContextFactory<Men
             .UseSnakeCaseNamingConvention()
             .Options;
 
-        return new MentorTaskFlowDbContext(options);
+        // Suppressed scope: the design-time context only builds the model to scaffold migrations and
+        // never reads data, so applying a tenant filter would be meaningless here.
+        var tenantFilter = new TenantFilterState();
+        tenantFilter.Suppress();
+
+        return new MentorTaskFlowDbContext(options, tenantFilter);
     }
 }

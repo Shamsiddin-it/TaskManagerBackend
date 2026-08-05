@@ -1,4 +1,7 @@
 using System.Reflection;
+using MentorTaskFlow.Domain.Categories;
+using MentorTaskFlow.Domain.Tenancy;
+using MentorTaskFlow.Domain.Users;
 using Microsoft.EntityFrameworkCore;
 
 namespace MentorTaskFlow.Infrastructure.Persistence;
@@ -13,17 +16,93 @@ namespace MentorTaskFlow.Infrastructure.Persistence;
 /// never by hand-mapping each column (<c>DEPLOY-001</c>).
 /// </para>
 /// <para>
-/// Entities arrive from Phase 1 (Tenancy foundation). Adding an entity here without its
-/// <c>organization_id</c>/<c>branch_id</c> columns, composite FK and tenant-leading index is an
-/// isolation defect — see DoD item 3a and Приложение M.
+/// Adding an entity here without its <c>organization_id</c>/<c>branch_id</c> columns, composite FK,
+/// tenant-leading index and query filter is an isolation defect — see DoD item 3a and Приложение M.
 /// </para>
 /// </remarks>
-public class MentorTaskFlowDbContext(DbContextOptions<MentorTaskFlowDbContext> options) : DbContext(options)
+public class MentorTaskFlowDbContext(
+    DbContextOptions<MentorTaskFlowDbContext> options,
+    TenantFilterState tenantFilter)
+    : DbContext(options)
 {
+    public DbSet<Organization> Organizations => Set<Organization>();
+
+    public DbSet<Branch> Branches => Set<Branch>();
+
+    public DbSet<Category> Categories => Set<Category>();
+
+    public DbSet<CategorySettings> CategorySettings => Set<CategorySettings>();
+
+    public DbSet<User> Users => Set<User>();
+
+    public DbSet<UserCategoryHistory> UserCategoryHistory => Set<UserCategoryHistory>();
+
+    public DbSet<UserBranchHistory> UserBranchHistory => Set<UserBranchHistory>();
+
+    // Referenced by the query-filter expressions below. EF Core re-evaluates these on every query,
+    // so one compiled model serves every tenant without leaking a captured value between requests.
+    private Guid? FilterOrganizationId => tenantFilter.IsSuppressed ? null : tenantFilter.OrganizationId;
+
+    private Guid? FilterBranchId => tenantFilter.IsSuppressed ? null : tenantFilter.BranchId;
+
+    private bool FilterSuppressed => tenantFilter.IsSuppressed;
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
         modelBuilder.ApplyConfigurationsFromAssembly(Assembly.GetExecutingAssembly());
+
+        ApplyTenantQueryFilters(modelBuilder);
+    }
+
+    /// <summary>
+    /// Level 1 and level 2 of the six-level isolation model (TZ 9.1), applied at the ORM boundary.
+    /// </summary>
+    /// <remarks>
+    /// Each filter is fail-closed: when no scope has been set and suppression was not requested,
+    /// <c>FilterOrganizationId</c> is null and nothing matches. Branch narrowing is skipped when
+    /// <c>FilterBranchId</c> is null, which is the all-branches read context of an Organization Admin
+    /// (<c>TEN-034</c>) — a read-only mode, so nothing is written under a null branch.
+    /// </remarks>
+    private void ApplyTenantQueryFilters(ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity<Branch>().HasQueryFilter(e =>
+            FilterSuppressed || (FilterOrganizationId != null && e.OrganizationId == FilterOrganizationId));
+
+        modelBuilder.Entity<Category>().HasQueryFilter(e =>
+            FilterSuppressed
+            || (FilterOrganizationId != null
+                && e.OrganizationId == FilterOrganizationId
+                && (FilterBranchId == null || e.BranchId == FilterBranchId)));
+
+        modelBuilder.Entity<CategorySettings>().HasQueryFilter(e =>
+            FilterSuppressed
+            || (FilterOrganizationId != null
+                && e.OrganizationId == FilterOrganizationId
+                && (FilterBranchId == null || e.BranchId == FilterBranchId)));
+
+        // Users are filtered by organization and, when a branch is selected, by branch. An
+        // Organization Admin has BranchId NULL, so a branch-narrowed query must still return them —
+        // otherwise selecting a branch would hide the organization's own administrators.
+        modelBuilder.Entity<User>().HasQueryFilter(e =>
+            FilterSuppressed
+            || (FilterOrganizationId != null
+                && e.OrganizationId == FilterOrganizationId
+                && (FilterBranchId == null || e.BranchId == FilterBranchId || e.BranchId == null)));
+
+        modelBuilder.Entity<UserCategoryHistory>().HasQueryFilter(e =>
+            FilterSuppressed
+            || (FilterOrganizationId != null
+                && e.OrganizationId == FilterOrganizationId
+                && (FilterBranchId == null || e.BranchId == FilterBranchId)));
+
+        modelBuilder.Entity<UserBranchHistory>().HasQueryFilter(e =>
+            FilterSuppressed || (FilterOrganizationId != null && e.OrganizationId == FilterOrganizationId));
+
+        // Organization itself is filtered by primary key: a user never sees that another
+        // organization exists (ORG-022).
+        modelBuilder.Entity<Organization>().HasQueryFilter(e =>
+            FilterSuppressed || (FilterOrganizationId != null && e.Id == FilterOrganizationId));
     }
 
     protected override void ConfigureConventions(ModelConfigurationBuilder configurationBuilder)
