@@ -48,6 +48,32 @@ services:
       - "1025:1025"
       - "8025:8025"
 
+  # mtf-migrator: the same image, run once, applies migrations and provisions the first tenant
+  # (DEPLOY-016, DEPLOY-022). It connects as mentortaskflow_migrator — the only role with DDL rights
+  # — while the API connects as mentortaskflow_app, which has none (DEPLOY-017).
+  migrator:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["--migrate"]
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      ConnectionStrings__DefaultConnection: "Host=postgres;Port=5432;Database=mentortaskflow;Username=mentortaskflow_migrator;Password=mentortaskflow_dev"
+      Auth__JwtSigningKey: "${AUTH__JWT_SIGNING_KEY:-local-development-signing-key-not-for-any-real-deployment}"
+      Auth__AppBaseUrl: "http://localhost:5173"
+      # DEPLOY-023. No password variable exists: the first administrator receives a set-password link
+      # in this container's log and nothing else (DEPLOY-024, DEPLOY-025).
+      Bootstrap__OrganizationName: "SoftClub Academy"
+      Bootstrap__OrganizationSlug: "softclub-academy"
+      Bootstrap__HeadOfficeName: "Главный офис"
+      Bootstrap__HeadOfficeCode: "HQ"
+      Bootstrap__HeadOfficeTimeZone: "Asia/Dushanbe"
+      Bootstrap__AdminEmail: "admin@mentortaskflow.local"
+
   api:
     build:
       context: .
@@ -55,11 +81,17 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      migrator:
+        condition: service_completed_successfully
     environment:
       ASPNETCORE_ENVIRONMENT: Development
       ConnectionStrings__DefaultConnection: "Host=postgres;Port=5432;Database=mentortaskflow;Username=mentortaskflow_app;Password=mentortaskflow_dev"
-      Database__MigrateOnStartup: "true"
+      # False even locally: the migrator owns the schema, so both paths behave the same everywhere
+      # and a developer never sees a race the deployment would not have.
+      Database__MigrateOnStartup: "false"
       Cors__AllowedOrigins__0: "http://localhost:5173"
+      Auth__JwtSigningKey: "${AUTH__JWT_SIGNING_KEY:-local-development-signing-key-not-for-any-real-deployment}"
+      Auth__AppBaseUrl: "http://localhost:5173"
     ports:
       - "5000:8080"
 

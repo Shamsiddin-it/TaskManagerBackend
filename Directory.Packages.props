@@ -15,11 +15,23 @@
     <PackageVersion Include="Microsoft.Extensions.Diagnostics" Version="10.0.10" />
   </ItemGroup>
 
+  <ItemGroup Label="Identity">
+    <PackageVersion Include="Microsoft.Extensions.Caching.Memory" Version="10.0.10" />
+    <!-- Must not trail what JwtBearer 10.0.10 pulls in transitively, or central pinning reports NU1109. -->
+    <PackageVersion Include="System.IdentityModel.Tokens.Jwt" Version="8.19.2" />
+    <PackageVersion Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.10" />
+  </ItemGroup>
+
   <ItemGroup Label="Api">
     <PackageVersion Include="Microsoft.AspNetCore.OpenApi" Version="10.0.10" />
-    <!-- Pinned transitively: Microsoft.OpenApi 2.0.0 carries GHSA-v5pm-xwqc-g5wc (High). -->
-    <PackageVersion Include="Microsoft.OpenApi" Version="3.9.0" />
-    <PackageVersion Include="Swashbuckle.AspNetCore" Version="10.2.1" />
+    <!--
+      Microsoft.OpenApi 2.0.0 carries GHSA-v5pm-xwqc-g5wc (High), so it must be pinned away from.
+      3.9.0 was the first attempt, but Swashbuckle targets the 2.x object model and fails at runtime
+      with MissingMethodException on IOpenApiRequestBody.get_Content once any endpoint has a request
+      body. 2.11.0 is the fixed 2.x line: same API surface, no advisory.
+    -->
+    <PackageVersion Include="Microsoft.OpenApi" Version="2.11.0" />
+    <PackageVersion Include="Swashbuckle.AspNetCore" Version="10.2.3" />
     <PackageVersion Include="Serilog.AspNetCore" Version="10.0.0" />
     <PackageVersion Include="AspNetCore.HealthChecks.NpgSql" Version="9.0.0" />
   </ItemGroup>

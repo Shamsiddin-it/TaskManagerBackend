@@ -1,5 +1,7 @@
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using MentorTaskFlow.Api.Authentication;
 using MentorTaskFlow.Api.Extensions;
 using MentorTaskFlow.Api.HealthChecks;
 using MentorTaskFlow.Api.Middleware;
@@ -7,8 +9,10 @@ using MentorTaskFlow.Api.Options;
 using MentorTaskFlow.Api.Tenancy;
 using MentorTaskFlow.Application.Common.Tenancy;
 using MentorTaskFlow.Infrastructure;
+using MentorTaskFlow.Infrastructure.Identity;
 using MentorTaskFlow.Infrastructure.Options;
 using MentorTaskFlow.Infrastructure.Persistence;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using Serilog;
@@ -31,7 +35,11 @@ builder.Services.AddOptions<CorsOptions>()
     .Bind(builder.Configuration.GetSection(CorsOptions.SectionName))
     .ValidateOnStart();
 
-var corsOptions = builder.Configuration.GetSection(CorsOptions.SectionName).Get<CorsOptions>() ?? new CorsOptions();
+// Read lazily inside the policy builder below. ConfigurationManager is live, so a read at that point
+// includes every source added after this line — which is what makes the setting overridable by tests
+// and by a late-bound secret provider alike.
+CorsOptions ReadCorsOptions() =>
+    builder.Configuration.GetSection(CorsOptions.SectionName).Get<CorsOptions>() ?? new CorsOptions();
 
 // ---------------------------------------------------------------------------
 // MVC + JSON contract (API-003, API-005)
@@ -74,6 +82,8 @@ builder.Services.AddCors(options =>
 {
     options.AddPolicy(CorsOptions.PolicyName, policy =>
     {
+        var corsOptions = ReadCorsOptions();
+
         if (corsOptions.AllowedOrigins.Length == 0)
         {
             // No origin configured: no browser cross-origin request is accepted. A wildcard origin
@@ -104,6 +114,22 @@ builder.Services.AddScoped<RequestBranchContext>();
 builder.Services.AddScoped<IBranchContext>(sp => sp.GetRequiredService<RequestBranchContext>());
 
 // ---------------------------------------------------------------------------
+// Authentication (TZ 16). HS256 bearer tokens; the refresh token lives only in
+// the mtf_rt cookie and is never validated by this handler.
+// ---------------------------------------------------------------------------
+builder.Services
+    .AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+    .AddJwtBearer();
+
+// The validation parameters come from IOptions<AuthOptions>, not from an eager read of
+// builder.Configuration — see ConfigureJwtBearerOptions for why that distinction matters.
+builder.Services.AddSingleton<IConfigureOptions<JwtBearerOptions>, ConfigureJwtBearerOptions>();
+builder.Services.AddScoped<MtfJwtBearerEvents>();
+builder.Services.AddAuthorization();
+builder.Services.AddSingleton<AuthCookieManager>();
+builder.Services.AddMentorTaskFlowRateLimiting();
+
+// ---------------------------------------------------------------------------
 // HSTS (SEC-008) — max-age 31536000, includeSubDomains.
 // ---------------------------------------------------------------------------
 builder.Services.AddHsts(options =>
@@ -129,6 +155,34 @@ if (!string.IsNullOrWhiteSpace(connectionString))
 }
 
 var app = builder.Build();
+
+// ---------------------------------------------------------------------------
+// mtf-migrator mode (DEPLOY-016, DEPLOY-022). The same image, invoked as
+//   dotnet MentorTaskFlow.Api.dll --migrate
+// applies migrations, provisions the first tenant and exits. Keeping this out of
+// the API startup path is the whole point: several API replicas booting at once
+// would race for schema locks.
+// ---------------------------------------------------------------------------
+if (args.Contains("--migrate"))
+{
+    using var migrationScope = app.Services.CreateScope();
+    var services = migrationScope.ServiceProvider;
+    var migratorLogger = services.GetRequiredService<ILogger<Program>>();
+
+    await services.GetRequiredService<MentorTaskFlowDbContext>().Database.MigrateAsync();
+    migratorLogger.LogInformation("Migrations applied.");
+
+    var bootstrap = await services.GetRequiredService<BootstrapProvisioner>().ProvisionAsync(CancellationToken.None);
+
+    if (!bootstrap.Provisioned)
+    {
+        // Skipping is the normal path on every deploy after the first, so it is not an error
+        // (DEPLOY-032).
+        migratorLogger.LogInformation("Bootstrap skipped: {Reason}", bootstrap.SkipReason);
+    }
+
+    return;
+}
 
 // ---------------------------------------------------------------------------
 // Migrations. Development convenience only — DatabaseOptionsValidator refuses to

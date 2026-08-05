@@ -21,6 +21,7 @@
     <ProjectReference Include="..\..\src\MentorTaskFlow.Domain\MentorTaskFlow.Domain.csproj" />
     <ProjectReference Include="..\..\src\MentorTaskFlow.Application\MentorTaskFlow.Application.csproj" />
     <ProjectReference Include="..\..\src\MentorTaskFlow.Contracts\MentorTaskFlow.Contracts.csproj" />
+    <ProjectReference Include="..\..\src\MentorTaskFlow.Infrastructure\MentorTaskFlow.Infrastructure.csproj" />
   </ItemGroup>
 
 </Project>

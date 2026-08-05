@@ -43,6 +43,20 @@ public sealed class ForbiddenException(string code = ErrorCodes.Forbidden, strin
 /// and no endpoint changes more than one branch per request, so there is no default to assume
 /// (<c>TEN-034</c>).
 /// </remarks>
+/// <summary>
+/// 400 <c>SECURITY_TOKEN_INVALID</c>: a set-password or reset-password token is unknown, expired,
+/// already used or superseded (<c>AUTH-016</c>, <c>AUTH-017</c>).
+/// </summary>
+/// <remarks>
+/// One code for all four cases on purpose. Telling a caller «this token existed but expired» apart
+/// from «no such token» would confirm that a guessed value was otherwise real, and the message is
+/// shown to someone who, by definition, has not yet proven who they are.
+/// </remarks>
+public sealed class SecurityTokenInvalidException()
+    : AppException(
+        ErrorCodes.SecurityTokenInvalid,
+        "Ссылка недействительна или срок её действия истёк.");
+
 public sealed class BranchContextRequiredException()
     : AppException(
         ErrorCodes.BranchContextRequired,
@@ -67,6 +81,18 @@ public sealed class ValidationAppException : AppException
 
     public ValidationAppException(string field, string message)
         : this(new Dictionary<string, string[]> { [field] = [message] })
+    {
+    }
+
+    /// <summary>
+    /// Reports several violations for one field at once.
+    /// </summary>
+    /// <remarks>
+    /// Used by the password policy: surfacing one broken rule at a time turns setting a password into
+    /// a guessing game where every attempt reveals one more requirement (<c>AUTH-013</c>).
+    /// </remarks>
+    public ValidationAppException(string field, IReadOnlyCollection<string> messages)
+        : this(new Dictionary<string, string[]> { [field] = [.. messages] })
     {
     }
 }

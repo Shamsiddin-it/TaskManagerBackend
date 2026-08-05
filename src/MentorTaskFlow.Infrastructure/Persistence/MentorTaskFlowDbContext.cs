@@ -1,5 +1,6 @@
 using System.Reflection;
 using MentorTaskFlow.Domain.Categories;
+using MentorTaskFlow.Domain.Identity;
 using MentorTaskFlow.Domain.Tenancy;
 using MentorTaskFlow.Domain.Users;
 using Microsoft.EntityFrameworkCore;
@@ -38,6 +39,12 @@ public class MentorTaskFlowDbContext(
     public DbSet<UserCategoryHistory> UserCategoryHistory => Set<UserCategoryHistory>();
 
     public DbSet<UserBranchHistory> UserBranchHistory => Set<UserBranchHistory>();
+
+    // Identity tables carry no tenant columns and therefore no query filter: they are reached only
+    // through UserId and take part in no list or analytical query (TEN-009, Приложение M.1).
+    public DbSet<RefreshToken> RefreshTokens => Set<RefreshToken>();
+
+    public DbSet<UserSecurityToken> UserSecurityTokens => Set<UserSecurityToken>();
 
     // Referenced by the query-filter expressions below. EF Core re-evaluates these on every query,
     // so one compiled model serves every tenant without leaking a captured value between requests.
