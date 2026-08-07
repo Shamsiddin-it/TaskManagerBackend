@@ -1,4 +1,5 @@
 using MentorTaskFlow.Api.Authentication;
+using MentorTaskFlow.Api.Authorization;
 using MentorTaskFlow.Application.Common.Abstractions;
 using MentorTaskFlow.Application.Common.Tenancy;
 using MentorTaskFlow.Contracts.Auth;
@@ -77,7 +78,7 @@ public sealed class AuthController(
     /// (<c>AUTH-037</c>).
     /// </summary>
     [HttpGet("me")]
-    [Authorize]
+    [Authorize(Policy = MtfPolicies.Authenticated)]
     [ProducesResponseType<AuthUserDto>(StatusCodes.Status200OK)]
     public async Task<ActionResult<AuthUserDto>> MeAsync(CancellationToken cancellationToken)
     {
@@ -90,7 +91,7 @@ public sealed class AuthController(
 
     /// <summary><c>POST /auth/change-password</c> — requires the current password (<c>AUTH-014</c>).</summary>
     [HttpPost("change-password")]
-    [Authorize]
+    [Authorize(Policy = MtfPolicies.Authenticated)]
     [ProducesResponseType<LoginResponse>(StatusCodes.Status200OK)]
     public async Task<ActionResult<LoginResponse>> ChangePasswordAsync(
         ChangePasswordRequest request,

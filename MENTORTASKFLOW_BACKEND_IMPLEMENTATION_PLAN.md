@@ -206,7 +206,11 @@ PR:      в main, мержит заказчик
 - `GET /admin/audit-log` со scope-фильтром + запись `audit.read` (`AUD-002`, `TEN-041`).
 - Redaction: запрет записи токенов, паролей, presigned URL (`SEC-021`, `AUD-022`).
 
-**Тесты:** `TEST-SEC-001` (нет endpoint'а без policy), `TEST-TEN-018` (scope AuditLog), матрица 404 vs 403 vs 409.
+**Тесты:** `TEST-SEC-001` (нет endpoint'а без policy), `TEST-TEN-018` (scope AuditLog), append-only на уровне прав БД.
+
+**Закрыты переносы из фазы 2.** Bootstrap доведён до полных шести INSERT `DEPLOY-030` (добавлены `NotificationOutbox` с приглашением и `AuditLog` `bootstrap.provision`). Добавлены записи аудита `auth.refresh_reuse_detected` (`AUTH-008`) и `security.scope_override_rejected` (`TEN-032`, `AUD-020`).
+
+**Найдено при реализации.** Новый тест `EndpointPolicyTests` сразу поймал два endpoint'а фазы 2 (`GET /auth/me`, `POST /auth/change-password`) с голым `[Authorize]` без policy — прямое нарушение `SEC-001` и `TEN-035`. Исправлено.
 
 ---
 

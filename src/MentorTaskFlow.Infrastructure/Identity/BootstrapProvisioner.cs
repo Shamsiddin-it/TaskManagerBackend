@@ -1,4 +1,7 @@
+using System.Text.Json;
 using MentorTaskFlow.Application.Common.Abstractions;
+using MentorTaskFlow.Domain.Auditing;
+using MentorTaskFlow.Domain.Notifications;
 using MentorTaskFlow.Domain.Tenancy;
 using MentorTaskFlow.Domain.Users;
 using MentorTaskFlow.Infrastructure.Options;
@@ -29,6 +32,8 @@ public sealed record BootstrapResult(bool Provisioned, string? SetPasswordLink, 
 public sealed class BootstrapProvisioner(
     MentorTaskFlowDbContext dbContext,
     AuthService authService,
+    IAuditWriter auditWriter,
+    IOutboxWriter outboxWriter,
     IOptions<BootstrapOptions> options,
     IClock clock,
     ILogger<BootstrapProvisioner> logger)
@@ -82,6 +87,45 @@ public sealed class BootstrapProvisioner(
             await dbContext.SaveChangesAsync(cancellationToken);
 
             var setPasswordLink = await authService.IssueSetPasswordLinkAsync(admin, ipAddress: null, cancellationToken);
+
+            // Steps 5 and 6 of DEPLOY-030. Both carry BranchId = NULL: the first administrator is an
+            // Organization Admin who belongs to no branch, so the invitation and the provisioning
+            // record are organization-level by construction (TEN-042, TEN-048).
+            outboxWriter.EnqueueSystem(
+                new OutboxEntry
+                {
+                    RecipientUserId = admin.Id,
+                    EventType = NotificationEventTypes.UserInvitation,
+                    Channel = NotificationChannel.Email,
+                    DeduplicationKey = $"invitation:{admin.Id:N}",
+
+                    // The payload names the organization but carries no token and no link: NTF-017
+                    // forbids putting either in a notification payload, and the renderer builds the
+                    // link from the security token when it sends.
+                    Payload = JsonSerializer.SerializeToDocument(new
+                    {
+                        organizationName = organization.Name,
+                        fullName = admin.FullName,
+                    }),
+                },
+                organization.Id,
+                branchId: null);
+
+            auditWriter.WriteSystem(
+                new AuditEntry
+                {
+                    Action = AuditActions.BootstrapProvision,
+                    EntityType = nameof(Organization),
+                    EntityId = organization.Id,
+                    Metadata = JsonSerializer.SerializeToDocument(new
+                    {
+                        organizationSlug = organization.Slug,
+                        headOfficeCode = headOffice.Code,
+                    }),
+                },
+                organization.Id,
+                branchId: null);
+
             await dbContext.SaveChangesAsync(cancellationToken);
 
             await transaction.CommitAsync(cancellationToken);
