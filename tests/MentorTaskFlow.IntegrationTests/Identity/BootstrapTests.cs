@@ -1,12 +1,16 @@
+using MentorTaskFlow.Api.Middleware;
+using MentorTaskFlow.Application.Common.Abstractions;
+using MentorTaskFlow.Application.Common.Tenancy;
 using MentorTaskFlow.Domain.Identity;
 using MentorTaskFlow.Domain.Tenancy;
+using MentorTaskFlow.Infrastructure;
 using MentorTaskFlow.Infrastructure.Identity;
 using MentorTaskFlow.Infrastructure.Options;
 using MentorTaskFlow.Infrastructure.Persistence;
 using MentorTaskFlow.IntegrationTests.Persistence;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Logging.Abstractions;
-using Microsoft.Extensions.Options;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace MentorTaskFlow.IntegrationTests.Identity;
 
@@ -143,51 +147,74 @@ public sealed class BootstrapTests(PostgresFixture fixture) : IAsyncLifetime
         (await context.Users.CountAsync()).ShouldBe(0);
     }
 
-    private Task<BootstrapResult> ProvisionAsync(BootstrapOptions? options = null)
+    /// <summary>
+    /// Runs provisioning through the real DI registration.
+    /// </summary>
+    /// <remarks>
+    /// Resolving from the container rather than hand-wiring the constructors keeps this test honest:
+    /// it exercises the registration the migrator actually uses, and adding a dependency to
+    /// <c>BootstrapProvisioner</c> no longer silently breaks an unrelated test.
+    /// </remarks>
+    private async Task<BootstrapResult> ProvisionAsync(BootstrapOptions? options = null)
     {
-        var context = fixture.CreateContext(suppressTenantFilter: true);
-        var authOptions = Microsoft.Extensions.Options.Options.Create(new AuthOptions
-        {
-            JwtSigningKey = MentorTaskFlowApiFactory.TestSigningKey,
-            AppBaseUrl = MentorTaskFlowApiFactory.AllowedOrigin,
-        });
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["ConnectionStrings:DefaultConnection"] = fixture.ConnectionString,
+                ["Auth:JwtSigningKey"] = MentorTaskFlowApiFactory.TestSigningKey,
+                ["Auth:AppBaseUrl"] = MentorTaskFlowApiFactory.AllowedOrigin,
+            })
+            .Build();
 
-        var clock = new FixedClock(new DateTimeOffset(2026, 8, 5, 12, 0, 0, TimeSpan.Zero));
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddSingleton<IConfiguration>(configuration);
+        services.AddInfrastructure(configuration, isDevelopment: true);
+        services.Configure<BootstrapOptions>(_ => { });
+        services.AddSingleton(Microsoft.Extensions.Options.Options.Create(options ?? Options));
 
-        var authService = new AuthService(
-            context,
-            new Pbkdf2PasswordHasher(),
-            new SecureTokenService(),
-            new JwtTokenService(authOptions, clock),
-            new NoOpTokenVersionValidator(),
-            new Application.Common.Security.PasswordPolicy(new EmbeddedCommonPasswordCatalog()),
-            authOptions,
-            clock);
+        // The provisioner runs with no request and no principal — it is one of the registered system
+        // tasks of SEC-031, so the tenant filter is suppressed and the request context is empty.
+        services.AddScoped<IRequestContext, BackgroundRequestContext>();
+        services.AddScoped<ICurrentUserAccessor, NoPrincipalAccessor>();
+        services.AddScoped<IBranchContext, UnavailableBranchContext>();
 
-        var provisioner = new BootstrapProvisioner(
-            context,
-            authService,
-            Microsoft.Extensions.Options.Options.Create(options ?? Options),
-            clock,
-            NullLogger<BootstrapProvisioner>.Instance);
+        await using var provider = services.BuildServiceProvider();
+        using var scope = provider.CreateScope();
 
-        return provisioner.ProvisionAsync(CancellationToken.None);
+        scope.ServiceProvider.GetRequiredService<TenantFilterState>().Suppress();
+
+        return await scope.ServiceProvider
+            .GetRequiredService<BootstrapProvisioner>()
+            .ProvisionAsync(CancellationToken.None);
     }
 
-    private sealed class FixedClock(DateTimeOffset now) : Application.Common.Abstractions.IClock
+    private sealed class NoPrincipalAccessor : ICurrentUserAccessor
     {
-        public DateTimeOffset UtcNow => now;
+        public ICurrentUserContext? Current => null;
+
+        public bool IsAuthenticated => false;
     }
 
-    /// <summary>Provisioning issues no access token, so the version cache is never consulted.</summary>
-    private sealed class NoOpTokenVersionValidator : Application.Common.Security.ITokenVersionValidator
+    /// <summary>
+    /// Every member throws.
+    /// </summary>
+    /// <remarks>
+    /// Provisioning must reach only the <c>*System</c> overloads, which take scope explicitly. If it
+    /// ever reads the request scope instead, this fails loudly rather than silently writing an audit
+    /// row against whatever scope happened to be lying around.
+    /// </remarks>
+    private sealed class UnavailableBranchContext : IBranchContext
     {
-        public Task<Application.Common.Security.TokenVersionCheck> CheckAsync(
-            Guid userId, int presentedTokenVersion, CancellationToken cancellationToken) =>
-            Task.FromResult(Application.Common.Security.TokenVersionCheck.Valid);
+        public Guid EffectiveOrganizationId => throw new InvalidOperationException(
+            "Provisioning has no request scope; use the WriteSystem/EnqueueSystem overloads.");
 
-        public void Invalidate(Guid userId)
-        {
-        }
+        public Guid? EffectiveBranchId => throw new InvalidOperationException("Provisioning has no request scope.");
+
+        public bool IsAllBranchesReadContext => false;
+
+        public bool CanOverrideBranch => false;
+
+        public Guid RequireBranchForMutation() => throw new InvalidOperationException("Provisioning has no request scope.");
     }
 }

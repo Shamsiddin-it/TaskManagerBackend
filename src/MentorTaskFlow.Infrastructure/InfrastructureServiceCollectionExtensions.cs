@@ -1,8 +1,10 @@
 using MentorTaskFlow.Application.Common.Abstractions;
 using MentorTaskFlow.Application.Common.Security;
 using MentorTaskFlow.Application.Common.Tenancy;
+using MentorTaskFlow.Infrastructure.Auditing;
 using MentorTaskFlow.Infrastructure.Common;
 using MentorTaskFlow.Infrastructure.Identity;
+using MentorTaskFlow.Infrastructure.Notifications;
 using MentorTaskFlow.Infrastructure.Observability;
 using MentorTaskFlow.Infrastructure.Options;
 using MentorTaskFlow.Infrastructure.Persistence;
@@ -68,6 +70,14 @@ public static class InfrastructureServiceCollectionExtensions
 
         services.AddMetrics();
         services.AddSingleton<TenancyMetrics>();
+
+        // The DbContext is the unit of work; the interface exists so controllers can commit without
+        // referencing it directly (SEC-031).
+        services.AddScoped<IUnitOfWork>(sp => sp.GetRequiredService<MentorTaskFlowDbContext>());
+
+        services.AddScoped<IAuditWriter, AuditWriter>();
+        services.AddScoped<IAuditLogReader, AuditLogReader>();
+        services.AddScoped<IOutboxWriter, OutboxWriter>();
 
         AddIdentity(services, configuration);
 

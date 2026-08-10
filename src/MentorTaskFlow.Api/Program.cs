@@ -2,11 +2,13 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using MentorTaskFlow.Api.Authentication;
+using MentorTaskFlow.Api.Authorization;
 using MentorTaskFlow.Api.Extensions;
 using MentorTaskFlow.Api.HealthChecks;
 using MentorTaskFlow.Api.Middleware;
 using MentorTaskFlow.Api.Options;
 using MentorTaskFlow.Api.Tenancy;
+using MentorTaskFlow.Application.Common.Abstractions;
 using MentorTaskFlow.Application.Common.Tenancy;
 using MentorTaskFlow.Infrastructure;
 using MentorTaskFlow.Infrastructure.Identity;
@@ -26,7 +28,11 @@ var isDevelopment = builder.Environment.IsDevelopment();
 builder.Host.UseSerilog((context, services, configuration) => configuration
     .ReadFrom.Configuration(context.Configuration)
     .ReadFrom.Services(services)
-    .Enrich.FromLogContext());
+    .Enrich.FromLogContext()
+
+    // One central enricher rather than filtering at each call site (SEC-022): manual filtering fails
+    // the first time somebody adds a log statement and forgets.
+    .Enrich.With<SecretRedactionEnricher>());
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -125,7 +131,8 @@ builder.Services
 // builder.Configuration — see ConfigureJwtBearerOptions for why that distinction matters.
 builder.Services.AddSingleton<IConfigureOptions<JwtBearerOptions>, ConfigureJwtBearerOptions>();
 builder.Services.AddScoped<MtfJwtBearerEvents>();
-builder.Services.AddAuthorization();
+builder.Services.AddMentorTaskFlowAuthorization();
+builder.Services.AddScoped<IRequestContext, HttpRequestContext>();
 builder.Services.AddSingleton<AuthCookieManager>();
 builder.Services.AddMentorTaskFlowRateLimiting();
 
@@ -201,7 +208,22 @@ if (app.Services.GetRequiredService<IOptions<DatabaseOptions>>().Value.MigrateOn
 // ProblemDetails traceId carries the same identifier.
 // ---------------------------------------------------------------------------
 app.UseCorrelationId();
-app.UseSerilogRequestLogging();
+app.UseSerilogRequestLogging(options =>
+{
+    // Bodies of /auth/* and /telegram/bind-token are never logged (SEC-023). Serilog's request
+    // logging does not capture bodies by default; dropping the query string here closes the other
+    // path by which a token could reach the log.
+    options.GetLevel = (httpContext, _, exception) => exception is not null
+        ? Serilog.Events.LogEventLevel.Error
+        : Serilog.Events.LogEventLevel.Information;
+
+    options.EnrichDiagnosticContext = (diagnosticContext, httpContext) =>
+        diagnosticContext.Set(
+            "RequestPath",
+            SensitiveEndpoints.CarriesCredentials(httpContext.Request.Path)
+                ? httpContext.Request.Path.Value
+                : httpContext.Request.Path.Value + httpContext.Request.QueryString.Value);
+});
 app.UseMentorTaskFlowExceptionHandling();
 app.UseSecurityHeaders();
 

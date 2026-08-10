@@ -3,6 +3,7 @@ using MentorTaskFlow.Application.Common.Exceptions;
 using MentorTaskFlow.Application.Common.Security;
 using MentorTaskFlow.Contracts.Auth;
 using MentorTaskFlow.Contracts.Common;
+using MentorTaskFlow.Domain.Auditing;
 using MentorTaskFlow.Domain.Common;
 using MentorTaskFlow.Domain.Identity;
 using MentorTaskFlow.Domain.Users;
@@ -28,6 +29,7 @@ public sealed class AuthService(
     IJwtTokenService jwtTokenService,
     ITokenVersionValidator tokenVersionValidator,
     PasswordPolicy passwordPolicy,
+    IAuditWriter auditWriter,
     IOptions<AuthOptions> options,
     IClock clock) : IAuthService
 {
@@ -324,6 +326,21 @@ public sealed class AuthService(
         }
 
         user.BumpTokenVersion(now);
+
+        // Recorded as a system action: the caller has not proven who they are — that is the whole
+        // point of the detection — so attributing it to the token's owner would name a probable
+        // victim as the actor (AUTH-008, AUD-003).
+        auditWriter.WriteSystem(
+            new AuditEntry
+            {
+                Action = AuditActions.AuthRefreshReuseDetected,
+                EntityType = nameof(User),
+                EntityId = user.Id,
+                Result = AuditResult.Failure,
+                FailureReason = ErrorCodes.RefreshTokenReuseDetected,
+            },
+            user.OrganizationId,
+            user.BranchId);
 
         await dbContext.SaveChangesAsync(cancellationToken);
         tokenVersionValidator.Invalidate(user.Id);

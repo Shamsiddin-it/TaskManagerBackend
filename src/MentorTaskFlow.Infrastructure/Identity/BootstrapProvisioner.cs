@@ -1,4 +1,7 @@
+using System.Text.Json;
 using MentorTaskFlow.Application.Common.Abstractions;
+using MentorTaskFlow.Domain.Auditing;
+using MentorTaskFlow.Domain.Notifications;
 using MentorTaskFlow.Domain.Tenancy;
 using MentorTaskFlow.Domain.Users;
 using MentorTaskFlow.Infrastructure.Options;
@@ -29,21 +32,38 @@ public sealed record BootstrapResult(bool Provisioned, string? SetPasswordLink, 
 public sealed class BootstrapProvisioner(
     MentorTaskFlowDbContext dbContext,
     AuthService authService,
+    IAuditWriter auditWriter,
+    IOutboxWriter outboxWriter,
     IOptions<BootstrapOptions> options,
     IClock clock,
     ILogger<BootstrapProvisioner> logger)
 {
     private readonly BootstrapOptions _options = options.Value;
 
-    public async Task<BootstrapResult> ProvisionAsync(CancellationToken cancellationToken)
+    public Task<BootstrapResult> ProvisionAsync(CancellationToken cancellationToken)
     {
         if (!_options.IsComplete)
         {
-            return new BootstrapResult(false, null, "Bootstrap configuration is incomplete.");
+            return Task.FromResult(new BootstrapResult(false, null, "Bootstrap configuration is incomplete."));
         }
 
-        // Suppressed tenant filter: provisioning is one of the registered system tasks of SEC-031 —
-        // it runs with no principal and must observe the whole table to decide whether to act.
+        // The connection is configured with EnableRetryOnFailure, and a retrying execution strategy
+        // refuses a user-initiated transaction unless the whole unit is handed to it: on a transient
+        // failure it has to replay everything, and it cannot replay a transaction it does not own.
+        // Without this wrapper the provisioning below throws before touching the database.
+        var strategy = dbContext.Database.CreateExecutionStrategy();
+
+        return strategy.ExecuteAsync(() => ProvisionCoreAsync(cancellationToken));
+    }
+
+    private async Task<BootstrapResult> ProvisionCoreAsync(CancellationToken cancellationToken)
+    {
+        // Cleared on entry rather than once at the top: the execution strategy may replay this whole
+        // method, and entities staged by a failed attempt would otherwise be inserted twice.
+        //
+        // The tenant filter is suppressed for the duration — provisioning is one of the registered
+        // system tasks of SEC-031, running with no principal, and must see the whole table to decide
+        // whether to act at all.
         dbContext.ChangeTracker.Clear();
 
         if (await dbContext.Organizations.IgnoreQueryFilters().AnyAsync(cancellationToken))
@@ -82,6 +102,45 @@ public sealed class BootstrapProvisioner(
             await dbContext.SaveChangesAsync(cancellationToken);
 
             var setPasswordLink = await authService.IssueSetPasswordLinkAsync(admin, ipAddress: null, cancellationToken);
+
+            // Steps 5 and 6 of DEPLOY-030. Both carry BranchId = NULL: the first administrator is an
+            // Organization Admin who belongs to no branch, so the invitation and the provisioning
+            // record are organization-level by construction (TEN-042, TEN-048).
+            outboxWriter.EnqueueSystem(
+                new OutboxEntry
+                {
+                    RecipientUserId = admin.Id,
+                    EventType = NotificationEventTypes.UserInvitation,
+                    Channel = NotificationChannel.Email,
+                    DeduplicationKey = $"invitation:{admin.Id:N}",
+
+                    // The payload names the organization but carries no token and no link: NTF-017
+                    // forbids putting either in a notification payload, and the renderer builds the
+                    // link from the security token when it sends.
+                    Payload = JsonSerializer.SerializeToDocument(new
+                    {
+                        organizationName = organization.Name,
+                        fullName = admin.FullName,
+                    }),
+                },
+                organization.Id,
+                branchId: null);
+
+            auditWriter.WriteSystem(
+                new AuditEntry
+                {
+                    Action = AuditActions.BootstrapProvision,
+                    EntityType = nameof(Organization),
+                    EntityId = organization.Id,
+                    Metadata = JsonSerializer.SerializeToDocument(new
+                    {
+                        organizationSlug = organization.Slug,
+                        headOfficeCode = headOffice.Code,
+                    }),
+                },
+                organization.Id,
+                branchId: null);
+
             await dbContext.SaveChangesAsync(cancellationToken);
 
             await transaction.CommitAsync(cancellationToken);

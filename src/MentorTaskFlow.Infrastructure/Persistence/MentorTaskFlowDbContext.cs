@@ -1,6 +1,8 @@
 using System.Reflection;
+using MentorTaskFlow.Domain.Auditing;
 using MentorTaskFlow.Domain.Categories;
 using MentorTaskFlow.Domain.Identity;
+using MentorTaskFlow.Domain.Notifications;
 using MentorTaskFlow.Domain.Tenancy;
 using MentorTaskFlow.Domain.Users;
 using Microsoft.EntityFrameworkCore;
@@ -24,7 +26,7 @@ namespace MentorTaskFlow.Infrastructure.Persistence;
 public class MentorTaskFlowDbContext(
     DbContextOptions<MentorTaskFlowDbContext> options,
     TenantFilterState tenantFilter)
-    : DbContext(options)
+    : DbContext(options), Application.Common.Abstractions.IUnitOfWork
 {
     public DbSet<Organization> Organizations => Set<Organization>();
 
@@ -45,6 +47,10 @@ public class MentorTaskFlowDbContext(
     public DbSet<RefreshToken> RefreshTokens => Set<RefreshToken>();
 
     public DbSet<UserSecurityToken> UserSecurityTokens => Set<UserSecurityToken>();
+
+    public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
+
+    public DbSet<NotificationOutbox> NotificationOutbox => Set<NotificationOutbox>();
 
     // Referenced by the query-filter expressions below. EF Core re-evaluates these on every query,
     // so one compiled model serves every tenant without leaking a captured value between requests.
@@ -110,6 +116,24 @@ public class MentorTaskFlowDbContext(
         // organization exists (ORG-022).
         modelBuilder.Entity<Organization>().HasQueryFilter(e =>
             FilterSuppressed || (FilterOrganizationId != null && e.Id == FilterOrganizationId));
+
+        // AuditLog and NotificationOutbox use the same shape, and it produces exactly the visibility
+        // TEN-040 and TEN-046 require without a special case:
+        //   Branch Admin  — FilterBranchId is their branch, so `e.BranchId == FilterBranchId` also
+        //                   excludes the organization-level rows they must not see (TEN-049).
+        //   Org Admin     — FilterBranchId is null in the all-branches context, so no branch
+        //                   narrowing applies and the organization-level rows are visible.
+        modelBuilder.Entity<AuditLog>().HasQueryFilter(e =>
+            FilterSuppressed
+            || (FilterOrganizationId != null
+                && e.OrganizationId == FilterOrganizationId
+                && (FilterBranchId == null || e.BranchId == FilterBranchId)));
+
+        modelBuilder.Entity<NotificationOutbox>().HasQueryFilter(e =>
+            FilterSuppressed
+            || (FilterOrganizationId != null
+                && e.OrganizationId == FilterOrganizationId
+                && (FilterBranchId == null || e.BranchId == FilterBranchId)));
     }
 
     protected override void ConfigureConventions(ModelConfigurationBuilder configurationBuilder)

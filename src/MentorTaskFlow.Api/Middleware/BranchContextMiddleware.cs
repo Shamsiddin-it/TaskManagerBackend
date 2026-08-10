@@ -1,8 +1,11 @@
+using System.Text.Json;
 using MentorTaskFlow.Api.Options;
 using MentorTaskFlow.Api.Tenancy;
+using MentorTaskFlow.Application.Common.Abstractions;
 using MentorTaskFlow.Application.Common.Exceptions;
 using MentorTaskFlow.Application.Common.Tenancy;
 using MentorTaskFlow.Contracts.Common;
+using MentorTaskFlow.Domain.Auditing;
 using MentorTaskFlow.Domain.Tenancy;
 using MentorTaskFlow.Infrastructure.Observability;
 using MentorTaskFlow.Infrastructure.Persistence;
@@ -57,8 +60,10 @@ public sealed class BranchContextMiddleware(RequestDelegate next, IOptions<Tenan
         {
             // Rejected even when the value equals the caller's own branch. Any presence of the header
             // from these roles is either a client defect or a bypass attempt, and both warrant
-            // observation (TEN-032). AuditLog recording lands with the audit module in Phase 3.
+            // observation (TEN-032).
             metrics.RecordBranchScopeDenied();
+            await RecordScopeOverrideRejectionAsync(context, user, cancellationToken: context.RequestAborted);
+
             throw new ForbiddenException(
                 ErrorCodes.ScopeOverrideForbidden,
                 "Заголовок выбора филиала недопустим для данной роли.");
@@ -98,6 +103,60 @@ public sealed class BranchContextMiddleware(RequestDelegate next, IOptions<Tenan
         });
 
         await next(context);
+    }
+
+    /// <summary>
+    /// Records the rejected override attempt (<c>AUD-020</c>).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Written as a system action and committed on its own, before the 403 propagates. The request is
+    /// about to be aborted, so there is no later unit of work to ride along with, and a security
+    /// event that vanishes with the failed request is worthless.
+    /// </para>
+    /// <para>
+    /// A failure to record must not mask the 403 itself, so the write is best-effort: the rejection is
+    /// the security outcome that matters, the audit row is evidence about it.
+    /// </para>
+    /// </remarks>
+    private static async Task RecordScopeOverrideRejectionAsync(
+        HttpContext context,
+        ICurrentUserContext user,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var auditWriter = context.RequestServices.GetRequiredService<IAuditWriter>();
+            var unitOfWork = context.RequestServices.GetRequiredService<IUnitOfWork>();
+
+            auditWriter.WriteSystem(
+                new AuditEntry
+                {
+                    Action = AuditActions.SecurityScopeOverrideRejected,
+                    EntityType = nameof(Branch),
+                    Result = AuditResult.Failure,
+                    FailureReason = ErrorCodes.ScopeOverrideForbidden,
+                    Metadata = JsonSerializer.SerializeToDocument(new
+                    {
+                        actorRole = user.Role.ToString(),
+                        actorAdminScope = user.AdminScope?.ToString(),
+                    }),
+                },
+                user.OrganizationId,
+
+                // Branch-scoped for these roles, so a Branch Admin can see attempts made against their
+                // own branch. The organization-level variant of TEN-048 applies when the actor is an
+                // Organization Admin, which cannot reach this branch of the code.
+                user.BranchId);
+
+            await unitOfWork.SaveChangesAsync(cancellationToken);
+        }
+        catch (Exception exception)
+        {
+            context.RequestServices
+                .GetRequiredService<ILogger<BranchContextMiddleware>>()
+                .LogError(exception, "Failed to record a rejected scope-override attempt.");
+        }
     }
 
     private static async Task<Guid> ResolveRequestedBranchAsync(

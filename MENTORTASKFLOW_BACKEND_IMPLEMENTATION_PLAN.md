@@ -20,6 +20,7 @@
 | 6 | `ADR-001-organization-branch-isolation.md`, `MentorTaskFlow_TZ_v2.2_AUDIT.md` | **Получены и прочитаны** (05.08.2026). Подтверждают план; режим миграции — A (новая БД) | ADR-001 §5 |
 | 7 | `Microsoft.AspNetCore.OpenApi` | **Не используется.** OpenAPI генерируется только Swashbuckle | Его source-generator рассчитан на объектную модель Microsoft.OpenApi 2.x, а 2.0.0 несёт GHSA-v5pm-xwqc-g5wc (High). Пакет убран, а не порог аудита ослаблен (`SEC-014`). **Уточнено в фазе 2:** первоначальный пин на `Microsoft.OpenApi 3.9.0` оказался неверным — Swashbuckle падает с `MissingMethodException` на `IOpenApiRequestBody.get_Content`, как только появляется endpoint с телом запроса. Правильное решение — исправленная линия 2.x: `Microsoft.OpenApi 2.11.0` + `Swashbuckle 10.2.3`, аудит NuGet чист |
 | 8 | `Category.Name` — «3–50 символов» (10.2) | **Минимум снижен до 2.** Верхняя граница 50 и `varchar(50)` сохранены | **Противоречие внутри ТЗ.** Раздел 2 перечисляет направления как «C#, Python, Go, Frontend, Design», фикстура тестов изоляции 31.9 построена на категории `C#`. `C#` и `Go` — 2 символа. С минимумом 3 система не может смоделировать собственный пример. Требует подтверждения заказчика |
+| 9 | `TEN-048` — перечень действий с допустимым `BranchId IS NULL` | **Добавлено `audit.read`** (14 вместо 13) | **Противоречие внутри ТЗ.** `AUD-023` требует писать в запись чтения `branchFilter: "<uuid>\|all"`, а `TEN-033` делает режим «Все филиалы» умолчанием для Organization Admin без заголовка. Но `audit.read` отсутствует в `TEN-048`, поэтому такое чтение физически невозможно записать — филиала нет. Альтернативы хуже: приписать чтение произвольному филиалу — фальсифицировать журнал; запретить чтение — убрать возможность, которую Приложение D.7 прямо даёт. `audit.read` при этом **не** принудительно обнуляется: чтение Branch Admin несёт его филиал |
 
 **Проверка перед стартом (фаза 0):** ТЗ ссылается на разделы 24–25, 28–31, Приложения A/B/G–K/N — они прочитаны частично. Перед каждой фазой соответствующие разделы вычитываются полностью; расхождения с этим планом фиксируются в PR.
 
@@ -206,7 +207,13 @@ PR:      в main, мержит заказчик
 - `GET /admin/audit-log` со scope-фильтром + запись `audit.read` (`AUD-002`, `TEN-041`).
 - Redaction: запрет записи токенов, паролей, presigned URL (`SEC-021`, `AUD-022`).
 
-**Тесты:** `TEST-SEC-001` (нет endpoint'а без policy), `TEST-TEN-018` (scope AuditLog), матрица 404 vs 403 vs 409.
+**Тесты:** `TEST-SEC-001` (нет endpoint'а без policy), `TEST-TEN-018` (scope AuditLog), append-only на уровне прав БД.
+
+**Закрыты переносы из фазы 2.** Bootstrap доведён до полных шести INSERT `DEPLOY-030` (добавлены `NotificationOutbox` с приглашением и `AuditLog` `bootstrap.provision`). Добавлены записи аудита `auth.refresh_reuse_detected` (`AUTH-008`) и `security.scope_override_rejected` (`TEN-032`, `AUD-020`).
+
+**Найдено при реализации.**
+1. Новый тест `EndpointPolicyTests` сразу поймал два endpoint'а фазы 2 (`GET /auth/me`, `POST /auth/change-password`) с голым `[Authorize]` без policy — прямое нарушение `SEC-001` и `TEN-035`. Исправлено.
+2. `BootstrapProvisioner` открывал транзакцию через `BeginTransactionAsync` при включённом `EnableRetryOnFailure`. EF Core такое запрещает: retrying execution strategy не может переиграть транзакцию, которой не владеет. **Bootstrap упал бы и в production**, не только в тестах — прежние тесты этого не ловили, потому что собирали `DbContext` вручную без retry. Обёрнуто в `CreateExecutionStrategy().ExecuteAsync(...)`; change tracker очищается внутри делегата, иначе повтор вставил бы сущности дважды.
 
 ---
 
