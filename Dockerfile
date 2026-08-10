@@ -27,10 +27,13 @@ RUN dotnet publish src/MentorTaskFlow.Api/MentorTaskFlow.Api.csproj \
 FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
 WORKDIR /app
 
-# tzdata is required for IANA zone ids such as Asia/Dushanbe (BRN-010, CAT-023).
-RUN apt-get update \
- && apt-get install -y --no-install-recommends tzdata \
- && rm -rf /var/lib/apt/lists/*
+# DEPLOY-011 requires IANA tzdata for zone ids such as Asia/Dushanbe (BRN-010, CAT-023). The official
+# aspnet image already ships it, so this verifies rather than installs: an apt-get here added a
+# network dependency that fails whenever a mirror is mid-sync, for a package that was never missing.
+# If a future base image drops tzdata, the build stops here instead of shipping an image whose
+# deadline arithmetic silently falls back to UTC.
+RUN test -f /usr/share/zoneinfo/Asia/Dushanbe \
+ || (echo "IANA tzdata is missing from the base image (DEPLOY-011)." && exit 1)
 
 # Never run as root.
 RUN useradd --uid 10001 --create-home --shell /usr/sbin/nologin mentortaskflow
