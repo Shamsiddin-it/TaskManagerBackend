@@ -73,14 +73,15 @@ public static class AuditActions
     public const string BootstrapProvision = "bootstrap.provision";
 
     /// <summary>
-    /// The complete list of actions for which <c>BranchId IS NULL</c> is permitted (<c>TEN-048</c>).
+    /// Actions that are <b>always</b> recorded without a branch: they concern the organization as a
+    /// whole, so attributing them to whichever branch happened to be selected would be misleading.
     /// </summary>
     /// <remarks>
-    /// This set is the single source of truth for the CHECK constraint
-    /// <c>ck_audit_logs_branch_scope</c>: the migration is generated from it, so the database and the
-    /// code cannot drift. Adding an entry means editing the TZ, not just this file (<c>TEN-010</c>).
+    /// Exactly the list of <c>TEN-048</c>. Creating a branch, changing an administrative contour or
+    /// provisioning a tenant are not events "in" a branch, and a Branch Admin must not see them at
+    /// all (<c>TEN-049</c>).
     /// </remarks>
-    public static readonly IReadOnlySet<string> OrganizationLevelActions = new HashSet<string>(StringComparer.Ordinal)
+    public static readonly IReadOnlySet<string> AlwaysOrganizationLevelActions = new HashSet<string>(StringComparer.Ordinal)
     {
         OrganizationUpdate,
         BranchCreate,
@@ -96,4 +97,31 @@ public static class AuditActions
         ReportOrganizationExport,
         BootstrapProvision,
     };
+
+    /// <summary>
+    /// Every action for which <c>BranchId IS NULL</c> is permitted — the source of truth for
+    /// <c>ck_audit_logs_branch_scope</c>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The migration is generated from this set, so the database and the code cannot drift.
+    /// </para>
+    /// <para>
+    /// <b>Deviation from <c>TEN-048</c>, deliberate and flagged.</b> <see cref="AuditRead"/> is added
+    /// to the list of <c>TEN-048</c>. The TZ contradicts itself here: <c>AUD-023</c> requires the
+    /// record of a read to carry <c>branchFilter: "&lt;uuid&gt;|all"</c>, and <c>TEN-033</c> makes the
+    /// all-branches mode the default for an Organization Admin who sends no header — yet with
+    /// <c>audit.read</c> absent from <c>TEN-048</c>, that very read cannot be recorded, because it has
+    /// no branch to name. The alternatives were worse: attributing the read to an arbitrary branch
+    /// would falsify the audit trail, and refusing the read outright would remove a capability
+    /// Приложение D.7 grants explicitly.
+    /// </para>
+    /// <para>
+    /// Unlike the entries above, <see cref="AuditRead"/> is <b>not</b> forced to null: a Branch Admin's
+    /// read carries their branch, so they can still see their own reads. Only the all-branches read
+    /// has no branch to record.
+    /// </para>
+    /// </remarks>
+    public static readonly IReadOnlySet<string> OrganizationLevelActions =
+        new HashSet<string>(AlwaysOrganizationLevelActions, StringComparer.Ordinal) { AuditRead };
 }

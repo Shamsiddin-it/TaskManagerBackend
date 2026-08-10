@@ -43,7 +43,7 @@ namespace MentorTaskFlow.Infrastructure.Persistence.Migrations
                 {
                     table.PrimaryKey("pk_audit_logs", x => x.id);
                     table.CheckConstraint("ck_audit_logs_actor_shape", "(actor_type = 'System' AND actor_id IS NULL) OR (actor_type = 'User' AND actor_id IS NOT NULL)");
-                    table.CheckConstraint("ck_audit_logs_branch_scope", "branch_id IS NOT NULL OR action IN ('bootstrap.provision','branch.activate','branch.create','branch.deactivate','branch.make_head_office','branch.update','organization.update','report.organization_export','security.scope_override_rejected','storage.cross_scope_inconsistency','user.change_admin_scope','user.change_branch','user.create_organization_admin')");
+                    table.CheckConstraint("ck_audit_logs_branch_scope", "branch_id IS NOT NULL OR action IN ('audit.read','bootstrap.provision','branch.activate','branch.create','branch.deactivate','branch.make_head_office','branch.update','organization.update','report.organization_export','security.scope_override_rejected','storage.cross_scope_inconsistency','user.change_admin_scope','user.change_branch','user.create_organization_admin')");
                     table.ForeignKey(
                         name: "fk_audit_logs_branch_scope",
                         columns: x => new { x.branch_id, x.organization_id },
@@ -174,14 +174,19 @@ namespace MentorTaskFlow.Infrastructure.Persistence.Migrations
         /// <remarks>
         /// <para>
         /// The application role loses UPDATE and DELETE outright, so a defect that tries to rewrite or
-        /// erase an administrative record is refused by PostgreSQL even if it reaches the database.
+        /// erase an administrative record is refused by PostgreSQL even having reached the database.
         /// An audit trail the application can edit is not evidence.
         /// </para>
         /// <para>
         /// The retention role keeps DELETE — records expire after three years (<c>AUD-010</c>) — but is
-        /// denied UPDATE, because retention nulls IP and user-agent through a narrower path and must
-        /// never be able to alter the action itself. <c>notification_outbox</c> is fully mutable: rows
-        /// legitimately change status, attempt count and lock as they are delivered.
+        /// denied UPDATE, because retention nulls IP and user agent through a narrower path and must
+        /// never be able to alter the action itself. <c>notification_outbox</c> stays fully mutable:
+        /// rows legitimately change status, attempt count and lock as they are delivered.
+        /// </para>
+        /// <para>
+        /// Guarded by a role-existence check: the CI Testcontainers instance has only the default
+        /// superuser, and failing there would make the whole suite depend on roles that operations
+        /// provisions, not the migration.
         /// </para>
         /// </remarks>
         private static void ApplyAuditLogGuards(MigrationBuilder migrationBuilder)

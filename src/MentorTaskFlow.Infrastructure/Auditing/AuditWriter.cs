@@ -24,10 +24,11 @@ public sealed class AuditWriter(
             ?? throw new InvalidOperationException(
                 "IAuditWriter.Write requires an authenticated principal; use WriteSystem for background tasks.");
 
-        // An organization-level action legitimately has no branch. For everything else the effective
-        // branch is the scope the action was performed in; AuditLog.Record refuses the combination if
-        // it does not match TEN-048, and ck_audit_logs_branch_scope refuses it again in the database.
-        var branchId = AuditActions.OrganizationLevelActions.Contains(entry.Action)
+        // An always-organization-level action is recorded without a branch even when one is selected:
+        // creating a branch is not an event "in" the branch that happened to be in context.
+        // Everything else takes the effective scope, and a null there is caught by AuditLog.Record
+        // and again by ck_audit_logs_branch_scope.
+        var branchId = AuditActions.AlwaysOrganizationLevelActions.Contains(entry.Action)
             ? null
             : branchContext.EffectiveBranchId;
 

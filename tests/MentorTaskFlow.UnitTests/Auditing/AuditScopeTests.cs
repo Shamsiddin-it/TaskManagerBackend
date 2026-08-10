@@ -170,8 +170,27 @@ public sealed class AuditScopeTests
     [Fact]
     public void The_organization_level_lists_match_the_specification()
     {
-        AuditActions.OrganizationLevelActions.Count.ShouldBe(13);
+        // The 13 of TEN-048, verbatim.
+        AuditActions.AlwaysOrganizationLevelActions.Count.ShouldBe(13);
+
+        // Those 13 plus audit.read — the documented deviation, see AuditActions.OrganizationLevelActions.
+        AuditActions.OrganizationLevelActions.Count.ShouldBe(14);
+        AuditActions.OrganizationLevelActions.ShouldContain(AuditActions.AuditRead);
+
         NotificationEventTypes.OrganizationLevelEvents.Count.ShouldBe(4);
+    }
+
+    /// <summary>
+    /// <c>audit.read</c> may omit the branch but is not forced to: a Branch Admin's read carries their
+    /// branch, so they can still see their own reads (<c>TEN-049</c> excludes only branchless rows).
+    /// </summary>
+    [Fact]
+    public void An_audit_read_is_recordable_with_and_without_a_branch()
+    {
+        Should.NotThrow(() => Record(AuditActions.AuditRead, BranchId));
+        Should.NotThrow(() => Record(AuditActions.AuditRead, branchId: null));
+
+        AuditActions.AlwaysOrganizationLevelActions.ShouldNotContain(AuditActions.AuditRead);
     }
 
     private static AuditLog Record(string action, Guid? branchId) =>

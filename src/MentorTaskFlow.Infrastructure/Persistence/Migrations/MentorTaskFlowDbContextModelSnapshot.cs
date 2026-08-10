@@ -152,7 +152,7 @@ namespace MentorTaskFlow.Infrastructure.Persistence.Migrations
                         {
                             t.HasCheckConstraint("ck_audit_logs_actor_shape", "(actor_type = 'System' AND actor_id IS NULL) OR (actor_type = 'User' AND actor_id IS NOT NULL)");
 
-                            t.HasCheckConstraint("ck_audit_logs_branch_scope", "branch_id IS NOT NULL OR action IN ('bootstrap.provision','branch.activate','branch.create','branch.deactivate','branch.make_head_office','branch.update','organization.update','report.organization_export','security.scope_override_rejected','storage.cross_scope_inconsistency','user.change_admin_scope','user.change_branch','user.create_organization_admin')");
+                            t.HasCheckConstraint("ck_audit_logs_branch_scope", "branch_id IS NOT NULL OR action IN ('audit.read','bootstrap.provision','branch.activate','branch.create','branch.deactivate','branch.make_head_office','branch.update','organization.update','report.organization_export','security.scope_override_rejected','storage.cross_scope_inconsistency','user.change_admin_scope','user.change_branch','user.create_organization_admin')");
                         });
                 });
 
