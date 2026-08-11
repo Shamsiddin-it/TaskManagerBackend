@@ -43,6 +43,10 @@ desktop.ini
 logs/
 *.log
 
+## Generated OpenAPI specification — a CI artifact, published per API-002 rather than committed.
+## Committing it would create a second source of truth that drifts from the code it is generated from.
+openapi-v1.json
+
 ## Secrets and local configuration
 .env
 .env.*
