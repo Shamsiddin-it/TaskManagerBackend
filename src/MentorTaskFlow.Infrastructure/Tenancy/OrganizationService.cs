@@ -6,6 +6,7 @@ using MentorTaskFlow.Contracts.Tenancy;
 using MentorTaskFlow.Domain.Auditing;
 using MentorTaskFlow.Domain.Tenancy;
 using MentorTaskFlow.Infrastructure.Persistence;
+using MentorTaskFlow.Infrastructure.Persistence.Configurations;
 using Microsoft.EntityFrameworkCore;
 
 namespace MentorTaskFlow.Infrastructure.Tenancy;
@@ -21,19 +22,28 @@ public sealed class OrganizationService(
     public async Task<object> GetAsync(CancellationToken cancellationToken)
     {
         var user = currentUser.Current ?? throw new UnauthorizedException();
-        var organization = await FindAsync(cancellationToken);
+
+        // xmin is projected by the query rather than read from the change tracker: the row is not
+        // tracked, and Entry() on a detached entity would yield the default shadow value, handing the
+        // client a token that is refused on its first write.
+        var row = await dbContext.Organizations
+            .AsNoTracking()
+            .Where(o => o.Id == branchContext.EffectiveOrganizationId)
+            .Select(o => new OrganizationRow(o, EF.Property<uint>(o, ConcurrencyTokenExtensions.PropertyName)))
+            .FirstOrDefaultAsync(cancellationToken)
+            ?? throw new NotFoundException();
 
         // ORG-003: the full profile only for an Organization Admin. Slug, IsActive and the timestamps
         // serve no scenario of a Lead, Mentor or Branch Admin, and withholding them keeps the
         // disclosure surface as small as the requirement allows.
         return user is { Role: UserRole.Admin, AdminScope: AdminScope.Organization }
-            ? ToDto(organization)
-            : new OrganizationSummaryDto(organization.Id, organization.Name);
+            ? ToDto(row.Organization, ConcurrencyTokenAccessor.EncodeFrom(row.Xmin))
+            : new OrganizationSummaryDto(row.Organization.Id, row.Organization.Name);
     }
 
     public async Task<OrganizationDto> UpdateAsync(UpdateOrganizationRequest request, CancellationToken cancellationToken)
     {
-        var organization = await FindAsync(cancellationToken, tracked: true);
+        var organization = await FindTrackedAsync(cancellationToken);
         dbContext.Expect(organization, request.ConcurrencyToken);
 
         var previousName = organization.Name;
@@ -56,26 +66,30 @@ public sealed class OrganizationService(
 
         await dbContext.SaveWithConcurrencyCheckAsync(organization, cancellationToken);
 
-        return ToDto(organization);
+        return ToDto(organization, dbContext.Read(organization));
     }
 
-    private async Task<Organization> FindAsync(CancellationToken cancellationToken, bool tracked = false)
-    {
-        var source = tracked ? dbContext.Organizations : dbContext.Organizations.AsNoTracking();
+    /// <summary>
+    /// Loads the caller's own organization for a write path.
+    /// </summary>
+    /// <remarks>
+    /// The identifier comes from the principal and is never a parameter, so no request shape could ask
+    /// about another organization (<c>ORG-021</c>).
+    /// </remarks>
+    private async Task<Organization> FindTrackedAsync(CancellationToken cancellationToken) =>
+        await dbContext.Organizations.FirstOrDefaultAsync(
+                o => o.Id == branchContext.EffectiveOrganizationId,
+                cancellationToken)
+            ?? throw new NotFoundException();
 
-        // The identifier comes from the principal and is never a parameter, so there is no request
-        // shape that could ask about another organization (ORG-021).
-        return await source.FirstOrDefaultAsync(
-                   o => o.Id == branchContext.EffectiveOrganizationId,
-                   cancellationToken)
-               ?? throw new NotFoundException();
-    }
+    /// <summary>Carries the shadow <c>xmin</c> out of a no-tracking query alongside its entity.</summary>
+    private sealed record OrganizationRow(Organization Organization, uint Xmin);
 
-    private OrganizationDto ToDto(Organization organization) => new(
+    private static OrganizationDto ToDto(Organization organization, string concurrencyToken) => new(
         organization.Id,
         organization.Name,
         organization.Slug,
         organization.IsActive,
         organization.CreatedAt,
-        dbContext.Read(organization));
+        concurrencyToken);
 }

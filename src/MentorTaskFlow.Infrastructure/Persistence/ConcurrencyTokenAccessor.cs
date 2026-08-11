@@ -17,10 +17,32 @@ namespace MentorTaskFlow.Infrastructure.Persistence;
 /// </remarks>
 public static class ConcurrencyTokenAccessor
 {
-    /// <summary>Current token of a tracked entity, for returning to the client.</summary>
+    /// <summary>
+    /// Current token of a <b>tracked</b> entity, for returning to the client.
+    /// </summary>
+    /// <remarks>
+    /// Tracked only. Calling <c>Entry()</c> on an entity loaded with <c>AsNoTracking</c> starts
+    /// tracking it afresh with default shadow values, so the token would encode 0 and the client's
+    /// next write would be refused as a conflict on its first attempt. Read paths must project
+    /// <see cref="EncodeFrom"/> from the query instead.
+    /// </remarks>
     public static string Read<TEntity>(this DbContext dbContext, TEntity entity)
-        where TEntity : class =>
-        ConcurrencyToken.Encode(dbContext.Entry(entity).Property<uint>(ConcurrencyTokenExtensions.PropertyName).CurrentValue);
+        where TEntity : class
+    {
+        var entry = dbContext.Entry(entity);
+
+        if (entry.State is EntityState.Detached)
+        {
+            throw new InvalidOperationException(
+                $"{typeof(TEntity).Name} is not tracked, so its concurrency token cannot be read from the change " +
+                "tracker. Project EF.Property<uint>(e, \"ConcurrencyToken\") in the query instead.");
+        }
+
+        return ConcurrencyToken.Encode(entry.Property<uint>(ConcurrencyTokenExtensions.PropertyName).CurrentValue);
+    }
+
+    /// <summary>Encodes an <c>xmin</c> read directly by a projection, for no-tracking reads.</summary>
+    public static string EncodeFrom(uint xmin) => ConcurrencyToken.Encode(xmin);
 
     /// <summary>
     /// Arms the concurrency check with the value the client presented.

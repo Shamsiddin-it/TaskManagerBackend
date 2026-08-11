@@ -367,12 +367,22 @@ public sealed class BranchManagementTests(PostgresFixture fixture) : IAsyncLifet
     }
 
     /// <summary>
-    /// <c>TEST-TEN-033</c>: two concurrent transfers to different branches. Exactly one succeeds, and
-    /// the database never holds two head offices — the row lock on the organization serialises them
-    /// and the partial unique index is the final guard (<c>BRN-046</c>).
+    /// <c>TEST-TEN-033</c>: two competing transfers to different branches.
     /// </summary>
+    /// <remarks>
+    /// The assertion is deliberately <b>not</b> "exactly one 200". Two HTTP calls started together are
+    /// not guaranteed to overlap: if the first finishes before the second begins, both succeed, and a
+    /// pair of sequential transfers is correct behaviour rather than a defect. Asserting one success
+    /// made this test flaky for exactly that reason.
+    /// <para>
+    /// What must hold on every interleaving is asserted instead: the database ends with exactly one
+    /// head office, at least one caller wins, and a caller that loses is told 409 — never 500. The row
+    /// lock on the organization narrows the window and <c>ux_branches_single_head_office</c> is the
+    /// final guard (<c>BRN-021</c>, <c>BRN-046</c>).
+    /// </para>
+    /// </remarks>
     [Fact]
-    public async Task Two_concurrent_transfers_leave_exactly_one_head_office()
+    public async Task Competing_transfers_leave_exactly_one_head_office()
     {
         Guid bokhtarId;
 
@@ -393,13 +403,20 @@ public sealed class BranchManagementTests(PostgresFixture fixture) : IAsyncLifet
             clientA.PostAsJsonAsync($"/api/v1/branches/{_khujandId}/make-head-office", new BranchActionRequest(khujandToken)),
             clientB.PostAsJsonAsync($"/api/v1/branches/{bokhtarId}/make-head-office", new BranchActionRequest(bokhtarToken)));
 
-        responses.Count(r => r.StatusCode == HttpStatusCode.OK).ShouldBe(1);
+        responses.ShouldContain(r => r.StatusCode == HttpStatusCode.OK);
+
+        // A caller that loses the race is told 409, never 500: somebody else won, which is a state
+        // conflict the client resolves by reloading (BRN-046).
+        foreach (var loser in responses.Where(r => r.StatusCode != HttpStatusCode.OK))
+        {
+            loser.StatusCode.ShouldBe(HttpStatusCode.Conflict);
+            (await ReadCodeAsync(loser)).ShouldBe(ErrorCodes.ConcurrencyConflict);
+        }
 
         await using var context = fixture.CreateContext(suppressTenantFilter: true);
         var headOffices = await context.Branches.Where(b => b.IsHeadOffice).ToListAsync();
 
-        // The invariant that matters: whatever the losing caller was told, the database holds exactly
-        // one head office and no partial state.
+        // The invariant that matters on every interleaving: exactly one head office, no partial state.
         headOffices.ShouldHaveSingleItem();
     }
 

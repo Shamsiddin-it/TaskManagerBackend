@@ -7,6 +7,12 @@ using Microsoft.AspNetCore.Mvc;
 
 namespace MentorTaskFlow.Api.Controllers;
 
+/// <summary>Route names used to build <c>Location</c> headers (<c>API-007</c>, TZ 23.2).</summary>
+internal static class RouteNames
+{
+    public const string GetBranch = "branches.get";
+}
+
 /// <summary>
 /// Branch lifecycle (Приложение D.0, TZ 39.1–39.3).
 /// </summary>
@@ -51,7 +57,10 @@ public sealed class BranchesController(IBranchService branchService) : Controlle
     /// policy: which branch a caller may read depends on the identifier, and a foreign one answers
     /// 404 in the service (<c>BRN-007</c>…<c>BRN-009</c>).
     /// </remarks>
-    [HttpGet("{id:guid}")]
+    // Named explicitly: MVC strips the "Async" suffix from action names by default, so
+    // CreatedAtAction(nameof(GetAsync)) resolves nothing and the 201 fails at formatting time. A
+    // route name is immune to that convention.
+    [HttpGet("{id:guid}", Name = RouteNames.GetBranch)]
     [Authorize(Policy = MtfPolicies.Authenticated)]
     [ProducesResponseType<BranchDto>(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
@@ -67,7 +76,7 @@ public sealed class BranchesController(IBranchService branchService) : Controlle
     {
         var branch = await branchService.CreateAsync(request, cancellationToken);
 
-        return CreatedAtAction(nameof(GetAsync), new { id = branch.Id }, branch);
+        return CreatedAtRoute(RouteNames.GetBranch, new { id = branch.Id }, branch);
     }
 
     [HttpPut("{id:guid}")]

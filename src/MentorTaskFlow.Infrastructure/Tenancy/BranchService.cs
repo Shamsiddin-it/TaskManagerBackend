@@ -9,6 +9,7 @@ using MentorTaskFlow.Domain.Notifications;
 using MentorTaskFlow.Domain.Tenancy;
 using MentorTaskFlow.Domain.Users;
 using MentorTaskFlow.Infrastructure.Persistence;
+using MentorTaskFlow.Infrastructure.Persistence.Configurations;
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
 
@@ -46,14 +47,17 @@ public sealed class BranchService(
 
         var totalCount = await source.CountAsync(cancellationToken);
 
-        var branches = await source
+        // xmin is projected by the query, not read from the change tracker. These rows are not
+        // tracked, and Entry() on a detached entity starts tracking afresh with default shadow
+        // values — the token would encode 0 and the client's very first write would be refused as a
+        // conflict.
+        var rows = await source
             .Skip((page - 1) * pageSize)
             .Take(pageSize)
+            .Select(b => new BranchRow(b, EF.Property<uint>(b, ConcurrencyTokenExtensions.PropertyName)))
             .ToListAsync(cancellationToken);
 
-        // Projected after materialisation: the concurrency token is a shadow property and cannot be
-        // read inside a LINQ projection.
-        var items = branches.Select(ToDto).ToList();
+        var items = rows.Select(row => ToDto(row.Branch, ConcurrencyTokenAccessor.EncodeFrom(row.Xmin))).ToList();
 
         return new PagedResult<BranchDto>(items, page, pageSize, totalCount);
     }
@@ -61,25 +65,31 @@ public sealed class BranchService(
     public async Task<object> GetAsync(Guid branchId, CancellationToken cancellationToken)
     {
         var user = currentUser.Current ?? throw new UnauthorizedException();
-        var branch = await FindInOrganizationAsync(branchId, cancellationToken);
+
+        var row = await dbContext.Branches
+            .AsNoTracking()
+            .Where(b => b.Id == branchId && b.OrganizationId == branchContext.EffectiveOrganizationId)
+            .Select(b => new BranchRow(b, EF.Property<uint>(b, ConcurrencyTokenExtensions.PropertyName)))
+            .FirstOrDefaultAsync(cancellationToken)
+            ?? throw new NotFoundException();
 
         // A Lead or Mentor may read only their own branch, and only the minimal projection: address
         // and time zone play no part in their scenarios (BRN-009).
         if (user.Role is UserRole.Lead or UserRole.Mentor)
         {
-            return branch.Id == user.BranchId
-                ? ToSummary(branch)
+            return row.Branch.Id == user.BranchId
+                ? ToSummary(row.Branch)
                 : throw new NotFoundException();
         }
 
         // A Branch Admin has GET on their own branch and nothing else. Any other identifier answers
         // 404, identical to a branch that does not exist (BRN-008, TEN-006).
-        if (user is { Role: UserRole.Admin, AdminScope: AdminScope.Branch } && branch.Id != user.BranchId)
+        if (user is { Role: UserRole.Admin, AdminScope: AdminScope.Branch } && row.Branch.Id != user.BranchId)
         {
             throw new NotFoundException();
         }
 
-        return ToDto(branch);
+        return ToDto(row.Branch, ConcurrencyTokenAccessor.EncodeFrom(row.Xmin));
     }
 
     public async Task<BranchDto> CreateAsync(CreateBranchRequest request, CancellationToken cancellationToken)
@@ -107,14 +117,14 @@ public sealed class BranchService(
 
         await SaveDetectingDuplicateAsync(cancellationToken);
 
-        return ToDto(branch);
+        return ToDto(branch, dbContext.Read(branch));
     }
 
     public async Task<BranchDto> UpdateAsync(Guid branchId, UpdateBranchRequest request, CancellationToken cancellationToken)
     {
         EnsureTimeZoneExists(request.TimeZoneId);
 
-        var branch = await FindInOrganizationAsync(branchId, cancellationToken, tracked: true);
+        var branch = await FindInOrganizationAsync(branchId, cancellationToken);
         dbContext.Expect(branch, request.ConcurrencyToken);
 
         var previousTimeZone = branch.TimeZoneId;
@@ -148,12 +158,12 @@ public sealed class BranchService(
 
         await SaveDetectingDuplicateAsync(cancellationToken, branch);
 
-        return ToDto(branch);
+        return ToDto(branch, dbContext.Read(branch));
     }
 
     public async Task<BranchDto> ActivateAsync(Guid branchId, BranchActionRequest request, CancellationToken cancellationToken)
     {
-        var branch = await FindInOrganizationAsync(branchId, cancellationToken, tracked: true);
+        var branch = await FindInOrganizationAsync(branchId, cancellationToken);
         dbContext.Expect(branch, request.ConcurrencyToken);
 
         branch.Activate(clock.UtcNow);
@@ -168,12 +178,12 @@ public sealed class BranchService(
         await NotifyBranchStateChangeAsync(branch, NotificationEventTypes.BranchActivated, cancellationToken);
         await dbContext.SaveWithConcurrencyCheckAsync(branch, cancellationToken);
 
-        return ToDto(branch);
+        return ToDto(branch, dbContext.Read(branch));
     }
 
     public async Task<BranchDto> DeactivateAsync(Guid branchId, DeactivateBranchRequest request, CancellationToken cancellationToken)
     {
-        var branch = await FindInOrganizationAsync(branchId, cancellationToken, tracked: true);
+        var branch = await FindInOrganizationAsync(branchId, cancellationToken);
         dbContext.Expect(branch, request.ConcurrencyToken);
 
         // BRN-030: active users are not deactivated with the branch, so the operator has to say
@@ -209,7 +219,7 @@ public sealed class BranchService(
         await NotifyBranchStateChangeAsync(branch, NotificationEventTypes.BranchDeactivated, cancellationToken);
         await dbContext.SaveWithConcurrencyCheckAsync(branch, cancellationToken);
 
-        return ToDto(branch);
+        return ToDto(branch, dbContext.Read(branch));
     }
 
     public Task<BranchDto> MakeHeadOfficeAsync(Guid branchId, BranchActionRequest request, CancellationToken cancellationToken)
@@ -237,7 +247,7 @@ public sealed class BranchService(
             $"SELECT id FROM organizations WHERE id = {branchContext.EffectiveOrganizationId} FOR UPDATE",
             cancellationToken);
 
-        var target = await FindInOrganizationAsync(branchId, cancellationToken, tracked: true);
+        var target = await FindInOrganizationAsync(branchId, cancellationToken);
         dbContext.Expect(target, request.ConcurrencyToken);
 
         var previous = await dbContext.Branches
@@ -272,30 +282,52 @@ public sealed class BranchService(
             }),
         });
 
-        await dbContext.SaveWithConcurrencyCheckAsync(target, cancellationToken);
+        try
+        {
+            await dbContext.SaveWithConcurrencyCheckAsync(target, cancellationToken);
+        }
+        catch (DbUpdateException exception) when (IsHeadOfficeViolation(exception))
+        {
+            // The row lock narrows the window but is not the guarantee: ux_branches_single_head_office
+            // is (BRN-021), and it is what fires when two transfers still overlap. Translating the
+            // violation gives the loser the documented 409 CONCURRENCY_CONFLICT of BRN-046 instead of
+            // a 500, so the client knows to reload and retry rather than treating it as a server fault.
+            await transaction.RollbackAsync(cancellationToken);
+
+            throw new ConflictException(
+                ErrorCodes.ConcurrencyConflict,
+                "Главный офис был изменён другим администратором. Перезагрузите данные и повторите операцию.");
+        }
+
         await transaction.CommitAsync(cancellationToken);
 
-        return ToDto(target);
+        return ToDto(target, dbContext.Read(target));
     }
 
     // -----------------------------------------------------------------
     // Internals
     // -----------------------------------------------------------------
 
-    private async Task<Branch> FindInOrganizationAsync(
-        Guid branchId,
-        CancellationToken cancellationToken,
-        bool tracked = false)
-    {
-        var source = tracked ? dbContext.Branches : dbContext.Branches.AsNoTracking();
+    /// <summary>Loads a <b>tracked</b> branch for a write path.</summary>
+    /// <remarks>
+    /// The organization is pinned explicitly. A branch of another organization is indistinguishable
+    /// from one that does not exist — no code confirms its existence (<c>TEN-006</c>, <c>TEN-007</c>).
+    /// </remarks>
+    private async Task<Branch> FindInOrganizationAsync(Guid branchId, CancellationToken cancellationToken) =>
+        await dbContext.Branches.FirstOrDefaultAsync(
+                b => b.Id == branchId && b.OrganizationId == branchContext.EffectiveOrganizationId,
+                cancellationToken)
+            ?? throw new NotFoundException();
 
-        // The organization is pinned explicitly. A branch of another organization is indistinguishable
-        // from one that does not exist — no code confirms its existence (TEN-006, TEN-007).
-        return await source.FirstOrDefaultAsync(
-                   b => b.Id == branchId && b.OrganizationId == branchContext.EffectiveOrganizationId,
-                   cancellationToken)
-               ?? throw new NotFoundException();
-    }
+    /// <summary>Carries the shadow <c>xmin</c> out of a no-tracking query alongside its entity.</summary>
+    private sealed record BranchRow(Branch Branch, uint Xmin);
+
+    private static bool IsHeadOfficeViolation(DbUpdateException exception) =>
+        exception.InnerException is PostgresException
+        {
+            SqlState: PostgresErrorCodes.UniqueViolation,
+            ConstraintName: "ux_branches_single_head_office",
+        };
 
     private void EnsureTimeZoneExists(string timeZoneId)
     {
@@ -414,7 +446,7 @@ public sealed class BranchService(
         }
     }
 
-    private BranchDto ToDto(Branch branch) => new(
+    private static BranchDto ToDto(Branch branch, string concurrencyToken) => new(
         branch.Id,
         branch.OrganizationId,
         branch.Name,
@@ -425,7 +457,7 @@ public sealed class BranchService(
         branch.IsActive,
         branch.CreatedAt,
         branch.UpdatedAt,
-        dbContext.Read(branch));
+        concurrencyToken);
 
     private static BranchSummaryDto ToSummary(Branch branch) =>
         new(branch.Id, branch.Name, branch.Code, branch.IsHeadOffice);
