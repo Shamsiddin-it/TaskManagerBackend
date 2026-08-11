@@ -5,6 +5,7 @@ using MentorTaskFlow.Infrastructure.Auditing;
 using MentorTaskFlow.Infrastructure.Common;
 using MentorTaskFlow.Infrastructure.Identity;
 using MentorTaskFlow.Infrastructure.Notifications;
+using MentorTaskFlow.Infrastructure.Tenancy;
 using MentorTaskFlow.Infrastructure.Observability;
 using MentorTaskFlow.Infrastructure.Options;
 using MentorTaskFlow.Infrastructure.Persistence;
@@ -78,6 +79,10 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddScoped<IAuditWriter, AuditWriter>();
         services.AddScoped<IAuditLogReader, AuditLogReader>();
         services.AddScoped<IOutboxWriter, OutboxWriter>();
+
+        services.AddSingleton<ITimeZoneCatalog, TimeZoneCatalog>();
+        services.AddScoped<IOrganizationService, OrganizationService>();
+        services.AddScoped<IBranchService, BranchService>();
 
         AddIdentity(services, configuration);
 

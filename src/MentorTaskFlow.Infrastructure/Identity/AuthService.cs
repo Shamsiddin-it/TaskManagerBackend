@@ -3,6 +3,7 @@ using MentorTaskFlow.Application.Common.Exceptions;
 using MentorTaskFlow.Application.Common.Security;
 using MentorTaskFlow.Contracts.Auth;
 using MentorTaskFlow.Contracts.Common;
+using MentorTaskFlow.Contracts.Tenancy;
 using MentorTaskFlow.Domain.Auditing;
 using MentorTaskFlow.Domain.Common;
 using MentorTaskFlow.Domain.Identity;

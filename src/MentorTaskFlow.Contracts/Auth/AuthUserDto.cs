@@ -1,20 +1,6 @@
+using MentorTaskFlow.Contracts.Tenancy;
+
 namespace MentorTaskFlow.Contracts.Auth;
-
-/// <summary>Minimal organization view, available to any authenticated user (<c>ORG-003</c>).</summary>
-/// <remarks>
-/// Only <c>id</c> and <c>name</c>. <c>Slug</c>, <c>IsActive</c> and the service fields are withheld
-/// from Lead, Mentor and Branch Admin: no scenario of theirs needs them, and shipping them would
-/// widen the disclosure surface for nothing.
-/// </remarks>
-public sealed record OrganizationSummaryDto(Guid Id, string Name);
-
-/// <summary>Minimal branch view embedded in auth responses and list rows (<c>AUTH-038</c>).</summary>
-/// <remarks>
-/// Excludes <c>address</c> and <c>timeZoneId</c> on purpose: the time zone relevant to a Lead or
-/// Mentor comes from <c>CategorySettings</c>, and the address plays no part in any of their
-/// scenarios (<c>BRN-009</c>).
-/// </remarks>
-public sealed record BranchSummaryDto(Guid Id, string Name, string Code, bool IsHeadOffice);
 
 /// <summary>
 /// The single authoritative profile shape, returned identically by <c>POST /auth/login</c> and

@@ -229,7 +229,9 @@ PR:      в main, мержит заказчик
 - Валидация `TimeZoneId` по IANA tzdata (`BRN-010`).
 - `CreateBranchRequest` **без** поля `isHeadOffice` (`API-031`).
 
-**Тесты:** `TEST-TEN-033` (параллельная смена HeadOffice → ровно один), уникальность `code`/`normalizedName` в пределах Organization под гонкой.
+**Тесты:** `TEST-TEN-033` (параллельная смена HeadOffice → ровно один), `TEST-TEN-032`, уникальность `code`/`normalizedName` под гонкой, видимость профиля по ролям, concurrency token.
+
+**Добавлено сверх плана.** Механизм concurrency token (`API-020`, `API-026`) реализован здесь, а не отложен: это первые мутации, которым он нужен. `xmin` — shadow property, поэтому доступ к нему централизован в `ConcurrencyTokenAccessor`; клиенту уходит Base64Url, а не число, чтобы его нельзя было «услужливо» инкрементировать. Также добавлен `ITimeZoneCatalog` (`BRN-010`): Windows-идентификаторы вроде `Central Asia Standard Time` отклоняются, потому что на Linux-контейнерах их не существует и расчёт дедлайнов молча свалился бы в UTC.
 
 ---
 
