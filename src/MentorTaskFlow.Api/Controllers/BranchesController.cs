@@ -11,6 +11,7 @@ namespace MentorTaskFlow.Api.Controllers;
 internal static class RouteNames
 {
     public const string GetBranch = "branches.get";
+    public const string GetCategory = "categories.get";
 }
 
 /// <summary>
