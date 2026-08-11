@@ -20,9 +20,9 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@v6
         with:
           global-json-file: global.json
 
@@ -61,7 +61,7 @@ jobs:
 
       - name: Upload test results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: test-results
           path: TestResults/*.trx
@@ -71,9 +71,9 @@ jobs:
     needs: build-and-test
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@v6
         with:
           global-json-file: global.json
 
@@ -97,7 +97,7 @@ jobs:
             src/MentorTaskFlow.Api/bin/Release/net10.0/MentorTaskFlow.Api.dll v1
 
       - name: Upload OpenAPI specification
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: openapi
           path: openapi-v1.json
@@ -107,15 +107,23 @@ jobs:
     needs: build-and-test
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Build image
         run: docker build -t mentortaskflow:${{ github.sha }} .
 
       # SEC-014: the image is scanned as well as the dependency graph. Critical and High findings
       # fail the job — an image is not shipped with a known exploitable vulnerability.
+      #
+      # The tag carries a `v` prefix. Referencing `0.28.0` without it resolved to nothing, and the job
+      # died in three seconds before ever building an image — which is why the failure looked like a
+      # build problem rather than a missing action.
+      #
+      # Pinned to an exact version rather than a floating major: this is a third-party action, and a
+      # scanner that silently changes behaviour is the one place a supply-chain surprise would be
+      # least visible.
       - name: Scan image
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: mentortaskflow:${{ github.sha }}
           severity: CRITICAL,HIGH
