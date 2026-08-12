@@ -23,6 +23,19 @@ public sealed record AuditEntry
     /// <summary>Narrows the record to one category when the action concerns a specific one.</summary>
     public Guid? CategoryId { get; init; }
 
+    /// <summary>
+    /// Attributes the record to the subject's branch rather than the request's effective branch.
+    /// </summary>
+    /// <remarks>
+    /// Needed when the target object identifies its own branch. Deactivating a user of the Khujand
+    /// branch is an event in Khujand no matter which branch — if any — the acting Organization Admin
+    /// had selected. Приложение D.2 marks <c>X-MTF-Branch-Id</c> as required only for <c>POST /users</c>,
+    /// where no target exists yet to derive it from; forcing it on the other operations would demand a
+    /// header the contract does not ask for, and leaving the branch null would fail
+    /// <c>ck_audit_logs_branch_scope</c>.
+    /// </remarks>
+    public Guid? BranchId { get; init; }
+
     public AuditResult Result { get; init; } = AuditResult.Success;
 
     /// <summary>An error code. Never a message that could carry a secret (<c>AUD-022</c>).</summary>

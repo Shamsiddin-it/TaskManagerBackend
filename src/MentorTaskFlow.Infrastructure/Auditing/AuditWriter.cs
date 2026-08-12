@@ -26,11 +26,14 @@ public sealed class AuditWriter(
 
         // An always-organization-level action is recorded without a branch even when one is selected:
         // creating a branch is not an event "in" the branch that happened to be in context.
-        // Everything else takes the effective scope, and a null there is caught by AuditLog.Record
-        // and again by ck_audit_logs_branch_scope.
+        //
+        // Otherwise the caller may name the subject's branch explicitly — an operation on a user or a
+        // category is an event in *their* branch, whichever one the acting Organization Admin had
+        // selected — and the request's effective branch is the fallback. A null that reaches
+        // AuditLog.Record is caught there and again by ck_audit_logs_branch_scope.
         var branchId = AuditActions.AlwaysOrganizationLevelActions.Contains(entry.Action)
             ? null
-            : branchContext.EffectiveBranchId;
+            : entry.BranchId ?? branchContext.EffectiveBranchId;
 
         dbContext.AuditLogs.Add(AuditLog.Record(
             entry.Action,

@@ -7,6 +7,7 @@ using MentorTaskFlow.Infrastructure.Common;
 using MentorTaskFlow.Infrastructure.Identity;
 using MentorTaskFlow.Infrastructure.Notifications;
 using MentorTaskFlow.Infrastructure.Tenancy;
+using MentorTaskFlow.Infrastructure.Users;
 using MentorTaskFlow.Infrastructure.Observability;
 using MentorTaskFlow.Infrastructure.Options;
 using MentorTaskFlow.Infrastructure.Persistence;
@@ -86,6 +87,7 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddScoped<IOrganizationService, OrganizationService>();
         services.AddScoped<IBranchService, BranchService>();
         services.AddScoped<ICategoryService, CategoryService>();
+        services.AddScoped<IUserService, UserService>();
 
         AddIdentity(services, configuration);
 
