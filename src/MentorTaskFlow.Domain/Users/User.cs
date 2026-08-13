@@ -181,6 +181,30 @@ public sealed class User : AuditableEntity
         }
     }
 
+    /// <summary>
+    /// Changes the display name.
+    /// </summary>
+    /// <remarks>
+    /// Deliberately the only field a generic edit may touch. Role, scope and activity each carry
+    /// consequences a rename does not — token revocation, history rows, notifications — so each has
+    /// its own operation (<c>API-009</c>). The email is not editable either: it is the sign-in
+    /// identity and globally unique (<c>TEN-028</c>).
+    /// </remarks>
+    public void Rename(string fullName, DateTimeOffset now)
+    {
+        var trimmed = (fullName ?? string.Empty).Trim();
+
+        if (trimmed.Length is < FullNameMinLength or > FullNameMaxLength)
+        {
+            throw new DomainException(
+                DomainErrorCodes.ValidationFailed,
+                $"ФИО должно содержать от {FullNameMinLength} до {FullNameMaxLength} символов.");
+        }
+
+        FullName = trimmed;
+        UpdatedAt = now;
+    }
+
     /// <summary>Sets the first password through the invitation flow, or replaces it on reset.</summary>
     public void SetPasswordHash(string passwordHash, DateTimeOffset now)
     {

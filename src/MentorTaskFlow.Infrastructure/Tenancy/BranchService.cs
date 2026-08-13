@@ -247,28 +247,42 @@ public sealed class BranchService(
             $"SELECT id FROM organizations WHERE id = {branchContext.EffectiveOrganizationId} FOR UPDATE",
             cancellationToken);
 
-        var target = await FindInOrganizationAsync(branchId, cancellationToken);
-        dbContext.Expect(target, request.ConcurrencyToken);
+        var previousHeadOfficeId = await dbContext.Branches
+            .AsNoTracking()
+            .Where(b => b.OrganizationId == branchContext.EffectiveOrganizationId && b.IsHeadOffice)
+            .Select(b => (Guid?)b.Id)
+            .FirstOrDefaultAsync(cancellationToken);
 
-        var previous = await dbContext.Branches
-            .FirstOrDefaultAsync(
-                b => b.OrganizationId == branchContext.EffectiveOrganizationId && b.IsHeadOffice,
-                cancellationToken);
-
-        if (previous?.Id == target.Id)
+        if (previousHeadOfficeId == branchId)
         {
             throw new ConflictException(
                 ErrorCodes.HeadOfficeRequired,
                 "Филиал уже является главным офисом.");
         }
 
-        // Clear first, then set. The reverse order would momentarily leave two rows with the flag and
-        // violate ux_branches_single_head_office inside the transaction (BRN-035).
-        previous?.ClearHeadOffice(clock.UtcNow);
+        var now = clock.UtcNow;
+
+        // Clear first, then set, as two statements in that order — exactly the sketch of BRN-035.
+        //
+        // The clear is raw SQL rather than a tracked entity on purpose: EF Core decides the order of
+        // its UPDATE statements for two rows of the same table, and it is under no obligation to
+        // preserve the order the entities were modified in. When it emitted the SET before the CLEAR,
+        // ux_branches_single_head_office fired on a perfectly legitimate transfer. Issuing the
+        // statements explicitly removes the guesswork.
+        await dbContext.Database.ExecuteSqlAsync(
+            $"""
+             UPDATE branches
+             SET is_head_office = false, updated_at = {now}
+             WHERE organization_id = {branchContext.EffectiveOrganizationId} AND is_head_office = true
+             """,
+            cancellationToken);
+
+        var target = await FindInOrganizationAsync(branchId, cancellationToken);
+        dbContext.Expect(target, request.ConcurrencyToken);
 
         // Refuses an inactive branch: the organization must never be left with an unusable head
         // office (BRN-047).
-        target.MarkAsHeadOffice(clock.UtcNow);
+        target.MarkAsHeadOffice(now);
 
         auditWriter.Write(new AuditEntry
         {
@@ -277,7 +291,7 @@ public sealed class BranchService(
             EntityId = target.Id,
             Metadata = JsonSerializer.SerializeToDocument(new
             {
-                previousHeadOfficeId = previous?.Id,
+                previousHeadOfficeId,
                 newHeadOfficeId = target.Id,
             }),
         });
