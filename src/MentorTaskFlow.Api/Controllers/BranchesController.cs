@@ -13,6 +13,8 @@ internal static class RouteNames
     public const string GetBranch = "branches.get";
     public const string GetCategory = "categories.get";
     public const string GetUser = "users.get";
+    public const string GetTopic = "topics.get";
+    public const string GetTopicAssignment = "topic-assignments.get";
 }
 
 /// <summary>
