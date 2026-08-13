@@ -48,6 +48,13 @@ public static class AuditActions
     public const string CategoryDeactivate = "category.deactivate";
     public const string CategorySettingsUpdate = "category.settings_update";
 
+    public const string TopicCreate = "topic.create";
+    public const string TopicUpdate = "topic.update";
+    public const string TopicDelete = "topic.delete";
+    public const string TopicAssignmentCreate = "topic_assignment.create";
+    public const string TopicAssignmentUpdate = "topic_assignment.update";
+    public const string TopicAssignmentDelete = "topic_assignment.delete";
+
     // Authentication
     public const string AuthLogin = "auth.login";
     public const string AuthLogout = "auth.logout";
