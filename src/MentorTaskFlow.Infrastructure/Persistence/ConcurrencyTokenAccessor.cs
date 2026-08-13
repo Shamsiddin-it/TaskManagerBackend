@@ -45,21 +45,43 @@ public static class ConcurrencyTokenAccessor
     public static string EncodeFrom(uint xmin) => ConcurrencyToken.Encode(xmin);
 
     /// <summary>
-    /// Arms the concurrency check with the value the client presented.
+    /// Arms the concurrency check with the value the client presented, and rejects a token that is
+    /// already known to be stale.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// The <b>original</b> value is what EF Core puts in the <c>WHERE</c> clause of the UPDATE. Setting
     /// the current value instead would produce an update that always matches, and the conflict would
     /// go undetected — the classic way optimistic concurrency silently stops working.
+    /// </para>
+    /// <para>
+    /// The eager comparison decides precedence. Left to <c>SaveChanges</c>, the check runs after the
+    /// domain transition, so a client replaying a stale request is told its transition is illegal
+    /// rather than that its copy is out of date — and <c>FE-011</c>'s reload dialog never appears,
+    /// leaving the client holding the stale copy that caused the problem. <c>ASN-007</c> makes a
+    /// mismatched token a conflict on its own, whatever else is wrong with the request. EF's check
+    /// stays armed for the race between this comparison and the write.
+    /// </para>
     /// </remarks>
     public static void Expect<TEntity>(this DbContext dbContext, TEntity entity, string? clientToken)
         where TEntity : class
     {
         var expected = ConcurrencyToken.Decode(clientToken);
+        var property = dbContext.Entry(entity).Property<uint>(ConcurrencyTokenExtensions.PropertyName);
 
-        dbContext.Entry(entity)
-            .Property<uint>(ConcurrencyTokenExtensions.PropertyName)
-            .OriginalValue = expected;
+        if (property.CurrentValue != expected)
+        {
+            // The row in hand is the current one, so its token can be handed back directly (API-026).
+            throw new ConflictException(
+                ErrorCodes.ConcurrencyConflict,
+                "Объект был изменён другим пользователем. Перезагрузите данные и повторите операцию.",
+                new Dictionary<string, object?>
+                {
+                    ["currentConcurrencyToken"] = ConcurrencyToken.Encode(property.CurrentValue),
+                });
+        }
+
+        property.OriginalValue = expected;
     }
 }
 
