@@ -3,6 +3,7 @@ using MentorTaskFlow.Domain.Auditing;
 using MentorTaskFlow.Domain.Categories;
 using MentorTaskFlow.Domain.Identity;
 using MentorTaskFlow.Domain.Notifications;
+using MentorTaskFlow.Domain.Schedule;
 using MentorTaskFlow.Domain.Tenancy;
 using MentorTaskFlow.Domain.Users;
 using Microsoft.EntityFrameworkCore;
@@ -47,6 +48,10 @@ public class MentorTaskFlowDbContext(
     public DbSet<RefreshToken> RefreshTokens => Set<RefreshToken>();
 
     public DbSet<UserSecurityToken> UserSecurityTokens => Set<UserSecurityToken>();
+
+    public DbSet<Topic> Topics => Set<Topic>();
+
+    public DbSet<TopicAssignment> TopicAssignments => Set<TopicAssignment>();
 
     public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
 
@@ -102,6 +107,18 @@ public class MentorTaskFlowDbContext(
             || (FilterOrganizationId != null
                 && e.OrganizationId == FilterOrganizationId
                 && (FilterBranchId == null || e.BranchId == FilterBranchId || e.BranchId == null)));
+
+        modelBuilder.Entity<Topic>().HasQueryFilter(e =>
+            FilterSuppressed
+            || (FilterOrganizationId != null
+                && e.OrganizationId == FilterOrganizationId
+                && (FilterBranchId == null || e.BranchId == FilterBranchId)));
+
+        modelBuilder.Entity<TopicAssignment>().HasQueryFilter(e =>
+            FilterSuppressed
+            || (FilterOrganizationId != null
+                && e.OrganizationId == FilterOrganizationId
+                && (FilterBranchId == null || e.BranchId == FilterBranchId)));
 
         modelBuilder.Entity<UserCategoryHistory>().HasQueryFilter(e =>
             FilterSuppressed
