@@ -20,4 +20,9 @@ public static class DomainErrorCodes
     public const string CategoryInactive = "CATEGORY_INACTIVE";
     public const string BranchInactive = "BRANCH_INACTIVE";
     public const string OrganizationInactive = "ORGANIZATION_INACTIVE";
+    public const string AssignmentInvalidStatusTransition = "ASSIGNMENT_INVALID_STATUS_TRANSITION";
+    public const string AssignmentTerminal = "ASSIGNMENT_TERMINAL";
+    public const string ReassignNotAllowed = "REASSIGN_NOT_ALLOWED";
+    public const string SubmissionNotAllowed = "SUBMISSION_NOT_ALLOWED";
+    public const string AssigneeInactive = "ASSIGNEE_INACTIVE";
 }

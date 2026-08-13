@@ -1,4 +1,5 @@
 using System.Reflection;
+using MentorTaskFlow.Domain.Assignments;
 using MentorTaskFlow.Domain.Auditing;
 using MentorTaskFlow.Domain.Categories;
 using MentorTaskFlow.Domain.Identity;
@@ -52,6 +53,10 @@ public class MentorTaskFlowDbContext(
     public DbSet<Topic> Topics => Set<Topic>();
 
     public DbSet<TopicAssignment> TopicAssignments => Set<TopicAssignment>();
+
+    public DbSet<Assignment> Assignments => Set<Assignment>();
+
+    public DbSet<TaskEvent> TaskEvents => Set<TaskEvent>();
 
     public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
 
@@ -115,6 +120,18 @@ public class MentorTaskFlowDbContext(
                 && (FilterBranchId == null || e.BranchId == FilterBranchId)));
 
         modelBuilder.Entity<TopicAssignment>().HasQueryFilter(e =>
+            FilterSuppressed
+            || (FilterOrganizationId != null
+                && e.OrganizationId == FilterOrganizationId
+                && (FilterBranchId == null || e.BranchId == FilterBranchId)));
+
+        modelBuilder.Entity<Assignment>().HasQueryFilter(e =>
+            FilterSuppressed
+            || (FilterOrganizationId != null
+                && e.OrganizationId == FilterOrganizationId
+                && (FilterBranchId == null || e.BranchId == FilterBranchId)));
+
+        modelBuilder.Entity<TaskEvent>().HasQueryFilter(e =>
             FilterSuppressed
             || (FilterOrganizationId != null
                 && e.OrganizationId == FilterOrganizationId

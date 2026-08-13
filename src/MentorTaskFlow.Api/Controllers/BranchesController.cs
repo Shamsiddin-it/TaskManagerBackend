@@ -15,6 +15,7 @@ internal static class RouteNames
     public const string GetUser = "users.get";
     public const string GetTopic = "topics.get";
     public const string GetTopicAssignment = "topic-assignments.get";
+    public const string GetAssignment = "assignments.get";
 }
 
 /// <summary>
