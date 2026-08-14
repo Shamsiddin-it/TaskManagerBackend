@@ -6,6 +6,7 @@ using MentorTaskFlow.Application.Common.Tenancy;
 using MentorTaskFlow.Contracts.Common;
 using MentorTaskFlow.Contracts.Tenancy;
 using MentorTaskFlow.Contracts.Users;
+using MentorTaskFlow.Domain.Assignments;
 using MentorTaskFlow.Domain.Auditing;
 using MentorTaskFlow.Domain.Identity;
 using MentorTaskFlow.Domain.Notifications;
@@ -28,6 +29,7 @@ public sealed class UserService(
     IAuditWriter auditWriter,
     IOutboxWriter outboxWriter,
     ITokenVersionValidator tokenVersionValidator,
+    IRequestContext requestContext,
     AuthService authService,
     IClock clock) : IUserService
 {
@@ -298,6 +300,401 @@ public sealed class UserService(
 
         return ToDto(user, dbContext.Read(user), null);
     }
+
+    // -----------------------------------------------------------------
+    // Transfers (TZ 15.2, 39.6)
+    // -----------------------------------------------------------------
+
+    public Task<UserDto> ChangeCategoryAsync(Guid userId, ChangeCategoryRequest request, CancellationToken cancellationToken)
+    {
+        var strategy = dbContext.Database.CreateExecutionStrategy();
+
+        return strategy.ExecuteAsync(() => ChangeCategoryCoreAsync(userId, request, cancellationToken));
+    }
+
+    private async Task<UserDto> ChangeCategoryCoreAsync(
+        Guid userId,
+        ChangeCategoryRequest request,
+        CancellationToken cancellationToken)
+    {
+        var actor = RequireActor();
+        var reason = RequireReason(request.Reason);
+
+        dbContext.ChangeTracker.Clear();
+        await using var transaction = await dbContext.Database.BeginTransactionAsync(cancellationToken);
+
+        var user = await LockManageableAsync(userId, cancellationToken);
+        dbContext.Expect(user, request.ConcurrencyToken);
+
+        if (user.Role is UserRole.Admin)
+        {
+            throw new ValidationAppException("newCategoryId", "У администратора нет категории; смена категории неприменима.");
+        }
+
+        if (user.CategoryId == request.NewCategoryId)
+        {
+            // Not merely pointless: the transaction below revokes every session and bumps TokenVersion,
+            // so accepting a no-op would sign the person out to change nothing.
+            throw new ValidationAppException("newCategoryId", "Пользователь уже состоит в этой категории.");
+        }
+
+        var branchId = user.BranchId!.Value;
+
+        // BRN-032 first, then USER-014: a category inside a deactivated branch is unusable whatever its
+        // own flag says, and naming the category would send the administrator to fix the wrong thing.
+        await tenantState.EnsureWritableAsync(branchId, request.NewCategoryId, cancellationToken);
+
+        // USER-037: the target category must live in the user's own branch. A transfer that crosses
+        // branches is change-branch, which is authorised differently.
+        await EnsureCategoryBelongsToBranchAsync(request.NewCategoryId, branchId, cancellationToken);
+
+        await EnsureNotBlockedAsync(user, ErrorCodes.CategoryChangeBlocked, cancellationToken);
+
+        var previousCategoryId = user.CategoryId;
+        var now = clock.UtcNow;
+
+        user.ChangeCategory(request.NewCategoryId, now);
+
+        dbContext.UserCategoryHistory.Add(UserCategoryHistory.Record(
+            user.Id,
+            user.OrganizationId,
+            branchId,
+            previousCategoryId,
+            request.NewCategoryId,
+            user.Role,
+            user.Role,
+            actor.UserId,
+            reason,
+            requestContext.CorrelationId,
+            now));
+
+        await RevokeSessionsAsync(user, RefreshTokenRevocationReason.CategoryChanged, now, cancellationToken);
+
+        auditWriter.Write(new AuditEntry
+        {
+            Action = AuditActions.UserChangeCategory,
+            EntityType = nameof(User),
+            EntityId = user.Id,
+            BranchId = branchId,
+            CategoryId = request.NewCategoryId,
+            Metadata = JsonSerializer.SerializeToDocument(new
+            {
+                previousCategoryId,
+                newCategoryId = request.NewCategoryId,
+                reason,
+            }),
+        });
+
+        await SaveTranslatingConstraintsAsync(cancellationToken, user);
+        await transaction.CommitAsync(cancellationToken);
+
+        tokenVersionValidator.Invalidate(user.Id);
+
+        return ToDto(user, dbContext.Read(user), null);
+    }
+
+    public Task<UserDto> ChangeBranchAsync(Guid userId, ChangeBranchRequest request, CancellationToken cancellationToken)
+    {
+        var strategy = dbContext.Database.CreateExecutionStrategy();
+
+        return strategy.ExecuteAsync(() => ChangeBranchCoreAsync(userId, request, cancellationToken));
+    }
+
+    private async Task<UserDto> ChangeBranchCoreAsync(
+        Guid userId,
+        ChangeBranchRequest request,
+        CancellationToken cancellationToken)
+    {
+        var actor = RequireActor();
+        var reason = RequireReason(request.Reason);
+
+        // BRN-036 and USER-030: 403 rather than the usual 404, and deliberately so. A Branch Admin can
+        // see the user — they administer them — so hiding the user would be a lie they could detect.
+        // What they cannot do is authorise an operation whose other half lies outside their contour.
+        if (actor is not { Role: UserRole.Admin, AdminScope: AdminScope.Organization })
+        {
+            throw new ForbiddenException(
+                ErrorCodes.Forbidden,
+                "Перевод между филиалами доступен только Organization Admin.");
+        }
+
+        dbContext.ChangeTracker.Clear();
+        await using var transaction = await dbContext.Database.BeginTransactionAsync(cancellationToken);
+
+        var user = await LockManageableAsync(userId, cancellationToken);
+        dbContext.Expect(user, request.ConcurrencyToken);
+
+        // BRN-037: an Organization Admin has no branch to leave. Giving them one is a change of
+        // administrative contour and belongs to change-role (USER-033).
+        if (user is { Role: UserRole.Admin, AdminScope: AdminScope.Organization })
+        {
+            throw new ValidationAppException(
+                "newBranchId",
+                "Organization Admin не переводится в филиал: используйте change-role.");
+        }
+
+        if (user.BranchId == request.NewBranchId)
+        {
+            throw new ValidationAppException("newBranchId", "Пользователь уже числится в этом филиале.");
+        }
+
+        var newCategoryId = ResolveTransferCategory(user, request);
+
+        // BRN-037 checks the *target* only. The source branch may well be deactivated — moving people
+        // out of a closed branch is precisely what an administrator needs to do, and refusing would
+        // strand them there (BRN-033).
+        await EnsureBranchInOrganizationAsync(request.NewBranchId, cancellationToken);
+        await tenantState.EnsureWritableAsync(request.NewBranchId, newCategoryId, cancellationToken);
+
+        if (newCategoryId is { } categoryId)
+        {
+            await EnsureCategoryBelongsToBranchAsync(categoryId, request.NewBranchId, cancellationToken);
+        }
+
+        await EnsureNotBlockedAsync(user, ErrorCodes.BranchChangeBlocked, cancellationToken);
+
+        var previousBranchId = user.BranchId;
+        var previousCategoryId = user.CategoryId;
+        var correlationId = requestContext.CorrelationId;
+        var now = clock.UtcNow;
+
+        user.ChangeBranch(request.NewBranchId, newCategoryId, now);
+
+        dbContext.UserBranchHistory.Add(UserBranchHistory.Record(
+            user.OrganizationId,
+            user.Id,
+            previousBranchId,
+            request.NewBranchId,
+            previousCategoryId,
+            newCategoryId,
+            actor.UserId,
+            reason,
+            correlationId,
+            now));
+
+        // USER-025: a transfer that also changes category produces both rows. UserCategoryHistory
+        // records the move inside the branch it happened in — here, the one being left.
+        if (previousCategoryId != newCategoryId && previousBranchId is { } sourceBranchId)
+        {
+            dbContext.UserCategoryHistory.Add(UserCategoryHistory.Record(
+                user.Id,
+                user.OrganizationId,
+                sourceBranchId,
+                previousCategoryId,
+                newCategoryId,
+                user.Role,
+                user.Role,
+                actor.UserId,
+                reason,
+                correlationId,
+                now));
+        }
+
+        await RevokeSessionsAsync(user, RefreshTokenRevocationReason.BranchChanged, now, cancellationToken);
+
+        // AUTH-034: a set-password link issued in the context of the old branch dies with the rest of
+        // the access. Otherwise a pending invitation would still land the person in the branch they
+        // have just left.
+        await InvalidateSecurityTokensAsync(user, now, cancellationToken);
+
+        WriteTransferAudit(user, previousBranchId, previousCategoryId, newCategoryId, reason);
+
+        outboxWriter.EnqueueSystem(
+            new OutboxEntry
+            {
+                RecipientUserId = user.Id,
+                EventType = NotificationEventTypes.UserBranchChanged,
+                Channel = NotificationChannel.Email,
+                DeduplicationKey = $"branch-changed:{user.Id:N}:{correlationId:N}",
+                CategoryId = newCategoryId,
+                Payload = JsonSerializer.SerializeToDocument(new { reason }),
+            },
+            user.OrganizationId,
+            request.NewBranchId);
+
+        await SaveTranslatingConstraintsAsync(cancellationToken, user);
+        await transaction.CommitAsync(cancellationToken);
+
+        tokenVersionValidator.Invalidate(user.Id);
+
+        return ToDto(user, dbContext.Read(user), null);
+    }
+
+    /// <summary>
+    /// Writes the organization-level record and the two branch-scoped derivatives (<c>TEN-049</c>).
+    /// </summary>
+    /// <remarks>
+    /// A Branch Admin must not see <c>user.change_branch</c>: it names the counterpart branch and so
+    /// discloses the composition of the organization. They see <c>user.left_branch</c> or
+    /// <c>user.joined_branch</c> instead — who, when, and the bare fact of a transfer. The metadata of
+    /// the derivatives is therefore deliberately thin; adding the counterpart branch «for convenience»
+    /// would undo the whole point of splitting the record in three.
+    /// </remarks>
+    private void WriteTransferAudit(
+        User user,
+        Guid? previousBranchId,
+        Guid? previousCategoryId,
+        Guid? newCategoryId,
+        string reason)
+    {
+        auditWriter.Write(new AuditEntry
+        {
+            Action = AuditActions.UserChangeBranch,
+            EntityType = nameof(User),
+            EntityId = user.Id,
+            Metadata = JsonSerializer.SerializeToDocument(new
+            {
+                previousBranchId,
+                newBranchId = user.BranchId,
+                previousCategoryId,
+                newCategoryId,
+                reason,
+            }),
+        });
+
+        if (previousBranchId is { } sourceBranchId)
+        {
+            auditWriter.Write(new AuditEntry
+            {
+                Action = AuditActions.UserLeftBranch,
+                EntityType = nameof(User),
+                EntityId = user.Id,
+                BranchId = sourceBranchId,
+                CategoryId = previousCategoryId,
+            });
+        }
+
+        auditWriter.Write(new AuditEntry
+        {
+            Action = AuditActions.UserJoinedBranch,
+            EntityType = nameof(User),
+            EntityId = user.Id,
+            BranchId = user.BranchId,
+            CategoryId = newCategoryId,
+        });
+    }
+
+    /// <summary>Applies the scope shape of <c>USER-023</c> to the request (<c>BRN-037</c>).</summary>
+    private static Guid? ResolveTransferCategory(User user, ChangeBranchRequest request) => user.Role switch
+    {
+        UserRole.Lead or UserRole.Mentor => request.NewCategoryId
+            ?? throw new ValidationAppException("newCategoryId", "Для роли Lead или Mentor требуется категория в новом филиале."),
+
+        // A Branch Admin has no category anywhere, so accepting one would let the caller believe they
+        // had set something (TEN-014).
+        _ => request.NewCategoryId is null
+            ? null
+            : throw new ValidationAppException("newCategoryId", "У администратора филиала категории нет."),
+    };
+
+    /// <summary>
+    /// Refuses a transfer that would strand work or leave a category without its Lead
+    /// (<c>USER-012</c>, <c>USER-013</c>, <c>BRN-038</c>).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The body carries the identifiers of the blocking assignments and a reason code, and nothing
+    /// else — no titles, no names (<c>BRN-039</c>). It exists so an administrator can navigate to what
+    /// is in the way.
+    /// </para>
+    /// <para>
+    /// <b>Not yet checked:</b> the third condition of <c>BRN-038</c>, «an unfinished Review or a
+    /// started Submission upload». Neither entity exists before phases 10 and 11. The gap is narrow
+    /// rather than absent: an in-flight review implies an assignment in <c>InReview</c>, which the
+    /// assignee check below already catches, and the reviewer is their category's active Lead, whom
+    /// the Lead check catches. It is not empty, though, and the condition is added with those phases.
+    /// </para>
+    /// </remarks>
+    private async Task EnsureNotBlockedAsync(User user, string code, CancellationToken cancellationToken)
+    {
+        if (user is { Role: UserRole.Lead, IsActive: true })
+        {
+            throw new ConflictException(
+                code,
+                "Пользователь является активным тимлидом категории.",
+                new Dictionary<string, object?>
+                {
+                    ["reason"] = TransferBlockReasons.ActiveLead,
+                    ["blockingAssignmentIds"] = Array.Empty<Guid>(),
+                });
+        }
+
+        // IgnoreQueryFilters on purpose: the check must see every unfinished task of this user,
+        // including any outside the branch currently selected by the acting administrator. A blocking
+        // task hidden by a filter would let the transfer through and strand the work.
+        var blocking = await dbContext.Assignments
+            .IgnoreQueryFilters()
+            .AsNoTracking()
+            .Where(a => a.AssignedToId == user.Id
+                        && a.OrganizationId == user.OrganizationId
+                        && a.Status != AssignmentStatus.Approved
+                        && a.Status != AssignmentStatus.Cancelled)
+            .OrderBy(a => a.CreatedAt)
+            .Select(a => a.Id)
+            .ToListAsync(cancellationToken);
+
+        if (blocking.Count > 0)
+        {
+            throw new ConflictException(
+                code,
+                "У пользователя есть незавершённые задачи.",
+                new Dictionary<string, object?>
+                {
+                    ["reason"] = TransferBlockReasons.ActiveAssignments,
+                    ["blockingAssignmentIds"] = blocking,
+                });
+        }
+    }
+
+    /// <summary>
+    /// Loads the user for a transfer with the row locked for the rest of the transaction.
+    /// </summary>
+    /// <remarks>
+    /// Scenarios 11 and 20 of Приложение K: without the lock, a Lead creating an assignment for this
+    /// mentor and an administrator transferring them can both pass their own check and both commit,
+    /// leaving a task in a branch its executor no longer belongs to. The other half of the pair is the
+    /// <c>FOR SHARE</c> taken by assignment creation.
+    /// <para>
+    /// Authorisation runs <b>before</b> the lock. Locking first would make the wait itself observable:
+    /// a request for a user outside the caller's contour would block until somebody else's transaction
+    /// finished, which is a timing channel the 404 of <c>TEN-006</c> is meant to close.
+    /// </para>
+    /// </remarks>
+    private async Task<User> LockManageableAsync(Guid userId, CancellationToken cancellationToken)
+    {
+        var user = await FindManageableAsync(userId, cancellationToken);
+
+        await dbContext.Database.ExecuteSqlAsync(
+            $"SELECT id FROM users WHERE id = {user.Id} FOR UPDATE",
+            cancellationToken);
+
+        // Re-read under the lock: the row may have changed between the authorisation read and the
+        // lock, and every check below — and the concurrency token — must see the settled state.
+        await dbContext.Entry(user).ReloadAsync(cancellationToken);
+
+        return user;
+    }
+
+    private async Task EnsureBranchInOrganizationAsync(Guid branchId, CancellationToken cancellationToken)
+    {
+        var exists = await dbContext.Branches
+            .IgnoreQueryFilters()
+            .AnyAsync(
+                b => b.Id == branchId && b.OrganizationId == branchContext.EffectiveOrganizationId,
+                cancellationToken);
+
+        // 404, not 409: a branch of another organization must be indistinguishable from one that does
+        // not exist (BRN-037, TEN-006).
+        if (!exists)
+        {
+            throw new NotFoundException();
+        }
+    }
+
+    private static string RequireReason(string? reason) =>
+        reason is { Length: >= UserBranchHistory.ReasonMinLength and <= UserBranchHistory.ReasonMaxLength }
+            ? reason
+            : throw new ValidationAppException("reason", "Причина обязательна и должна содержать от 5 до 500 символов.");
 
     public async Task ResendInvitationAsync(Guid userId, CancellationToken cancellationToken)
     {

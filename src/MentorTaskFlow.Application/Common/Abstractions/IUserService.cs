@@ -63,6 +63,29 @@ public interface IUserService
     Task<UserDto> ChangeRoleAsync(Guid userId, ChangeRoleRequest request, CancellationToken cancellationToken);
 
     /// <summary>
+    /// Moves a user to another category <b>within their branch</b> (TZ 15.2).
+    /// </summary>
+    /// <remarks>
+    /// Blocked while the user holds an unfinished assignment or is the active Lead of their category —
+    /// 409 <c>CATEGORY_CHANGE_BLOCKED</c> naming the blocking tasks (<c>USER-012</c>,
+    /// <c>USER-013</c>). Historical assignments keep their original category, so the mentor keeps
+    /// reading their own past work while the new category's Lead never gains sight of it
+    /// (<c>USER-016</c>).
+    /// </remarks>
+    Task<UserDto> ChangeCategoryAsync(Guid userId, ChangeCategoryRequest request, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Moves a user to another branch (TZ 39.6).
+    /// </summary>
+    /// <remarks>
+    /// Organization Admin only. A Branch Admin is refused outright — a transfer touches two branches
+    /// at once, and an operation with one side outside the actor's contour cannot be authorised by
+    /// them (<c>BRN-036</c>, <c>USER-030</c>). Unlike a category change, this one takes the user's
+    /// own work out of reach: ownership never crosses a branch boundary (<c>USER-017</c>).
+    /// </remarks>
+    Task<UserDto> ChangeBranchAsync(Guid userId, ChangeBranchRequest request, CancellationToken cancellationToken);
+
+    /// <summary>
     /// Reissues the invitation, invalidating the previous link (<c>USER-009</c>, <c>AUTH-017</c>).
     /// </summary>
     Task ResendInvitationAsync(Guid userId, CancellationToken cancellationToken);

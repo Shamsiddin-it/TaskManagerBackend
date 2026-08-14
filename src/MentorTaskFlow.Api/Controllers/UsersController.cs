@@ -16,10 +16,9 @@ namespace MentorTaskFlow.Api.Controllers;
 /// is <c>ON DELETE RESTRICT</c>; deactivation is the supported path (<c>USER-022</c>).
 /// </para>
 /// <para>
-/// <c>change-category</c> and <c>change-branch</c> are absent from this phase on purpose. Both are
-/// blocked by unfinished assignments (<c>USER-012</c>, <c>BRN-038</c>), and assignments do not exist
-/// yet — implementing the transfers without their blocking condition would ship an operation that
-/// silently strands work.
+/// The two transfers are separate operations with separate authorisation, not one endpoint with an
+/// optional branch: a category change stays inside one administrative contour, while a branch change
+/// has one side outside any single Branch Admin's reach (<c>USER-037</c>, <c>BRN-036</c>).
 /// </para>
 /// </remarks>
 [ApiController]
@@ -125,6 +124,47 @@ public sealed class UsersController(IUserService userService) : ControllerBase
         ChangeRoleRequest request,
         CancellationToken cancellationToken) =>
         Ok(await userService.ChangeRoleAsync(id, request, cancellationToken));
+
+    /// <summary>
+    /// <c>POST /users/{id}/change-category</c> — a move within the user's own branch (TZ 15.2).
+    /// </summary>
+    /// <remarks>
+    /// Refused while the person holds unfinished work or is the active Lead of their category: the
+    /// answer carries the identifiers of the blocking tasks so the administrator can go and close them
+    /// (<c>USER-012</c>, <c>USER-013</c>).
+    /// </remarks>
+    [HttpPost("{id:guid}/change-category")]
+    [Authorize(Policy = MtfPolicies.AnyAdmin)]
+    [ProducesResponseType<UserDto>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    public async Task<ActionResult<UserDto>> ChangeCategoryAsync(
+        Guid id,
+        ChangeCategoryRequest request,
+        CancellationToken cancellationToken) =>
+        Ok(await userService.ChangeCategoryAsync(id, request, cancellationToken));
+
+    /// <summary>
+    /// <c>POST /users/{id}/change-branch</c> — Organization Admin only (TZ 39.6).
+    /// </summary>
+    /// <remarks>
+    /// A Branch Admin is refused for their own branch as much as for anyone else's. The transfer
+    /// touches two branches at once, and an operation with one side outside the actor's contour cannot
+    /// be authorised by them (<c>BRN-036</c>, <c>USER-030</c>). Historical work stays where it was
+    /// created and the transferred user loses sight of it — ownership never crosses a branch boundary
+    /// (<c>BRN-049</c>, <c>USER-017</c>).
+    /// </remarks>
+    [HttpPost("{id:guid}/change-branch")]
+    [Authorize(Policy = MtfPolicies.OrganizationAdmin)]
+    [ProducesResponseType<UserDto>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    public async Task<ActionResult<UserDto>> ChangeBranchAsync(
+        Guid id,
+        ChangeBranchRequest request,
+        CancellationToken cancellationToken) =>
+        Ok(await userService.ChangeBranchAsync(id, request, cancellationToken));
 
     /// <summary>
     /// <c>POST /users/{id}/resend-invitation</c> — 202, and the previous link stops working.
