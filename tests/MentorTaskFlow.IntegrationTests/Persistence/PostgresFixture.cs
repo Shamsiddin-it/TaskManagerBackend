@@ -77,7 +77,7 @@ public sealed class PostgresFixture : IAsyncLifetime
         await using var connection = await OpenRawConnectionAsync();
         await using var command = connection.CreateCommand();
         command.CommandText = """
-            TRUNCATE TABLE submissions, user_branch_history, user_category_history, category_settings,
+            TRUNCATE TABLE reviews, submissions, user_branch_history, user_category_history, category_settings,
                            users, categories, branches, organizations
             RESTART IDENTITY CASCADE;
             """;
