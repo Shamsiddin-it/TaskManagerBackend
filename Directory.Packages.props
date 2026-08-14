@@ -36,6 +36,16 @@
     <PackageVersion Include="AspNetCore.HealthChecks.NpgSql" Version="9.0.0" />
   </ItemGroup>
 
+  <ItemGroup Label="Notifications">
+    <!--
+      MailKit rather than System.Net.Mail.SmtpClient, which Microsoft documents as obsolete for new
+      development: it does not support modern authentication and cannot report per-recipient status,
+      which is what NTF-013 needs to tell a temporary failure from a permanent one.
+    -->
+    <PackageVersion Include="MailKit" Version="4.14.0" />
+    <PackageVersion Include="Microsoft.Extensions.Hosting.Abstractions" Version="10.0.10" />
+  </ItemGroup>
+
   <ItemGroup Label="Storage">
     <!--
       The AWS SDK rather than the MinIO client: the TZ specifies "S3-compatible storage (MinIO)", and

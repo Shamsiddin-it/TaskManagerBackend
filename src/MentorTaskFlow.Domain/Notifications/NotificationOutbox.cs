@@ -39,10 +39,6 @@ public enum NotificationStatus
 /// delivery time. Moving the recipient to another branch between creation and sending must not change
 /// where the notification was addressed (<c>TEN-041</c>).
 /// </para>
-/// <para>
-/// This phase ships the table and the enqueue path only; the worker, retry and dead-letter handling
-/// arrive with the notifications module.
-/// </para>
 /// </remarks>
 public sealed class NotificationOutbox : BaseEntity
 {
@@ -163,4 +159,157 @@ public sealed class NotificationOutbox : BaseEntity
             CreatedAt = now,
         };
     }
+
+    /// <summary>
+    /// The backoff of <c>NTF-013</c>: 1 min → 5 min → 15 min → 1 h → 6 h.
+    /// </summary>
+    /// <remarks>
+    /// Indexed by the attempt that just failed, so the first retry waits a minute and the fifth failure
+    /// has no delay to compute — it goes to the dead letter instead.
+    /// </remarks>
+    public static readonly IReadOnlyList<TimeSpan> RetryBackoff =
+    [
+        TimeSpan.FromMinutes(1),
+        TimeSpan.FromMinutes(5),
+        TimeSpan.FromMinutes(15),
+        TimeSpan.FromHours(1),
+        TimeSpan.FromHours(6),
+    ];
+
+    /// <summary>How long a captured row may stay in <see cref="NotificationStatus.Processing"/> (<c>NTF-012</c>).</summary>
+    public static readonly TimeSpan LeaseDuration = TimeSpan.FromMinutes(5);
+
+    /// <summary>Claims the row for one worker.</summary>
+    /// <remarks>
+    /// The batch is claimed in SQL with <c>FOR UPDATE SKIP LOCKED</c> so two workers never take the
+    /// same row (<c>NTF-011</c>); this method records the capture on the entity that SQL returned.
+    /// </remarks>
+    public void Capture(string workerId, DateTimeOffset now)
+    {
+        if (Status is not NotificationStatus.Pending)
+        {
+            throw new DomainException(
+                DomainErrorCodes.ValidationFailed,
+                $"Захватить можно только запись в статусе Pending, а не {Status}.");
+        }
+
+        Status = NotificationStatus.Processing;
+        LockedAt = now;
+        LockedBy = workerId;
+        LastAttemptAt = now;
+        Attempts++;
+    }
+
+    public void MarkSent(string? providerMessageId, DateTimeOffset now)
+    {
+        EnsureProcessing();
+
+        Status = NotificationStatus.Sent;
+        SentAt = now;
+        ProviderMessageId = providerMessageId;
+        LastError = null;
+        LockedAt = null;
+        LockedBy = null;
+    }
+
+    /// <summary>
+    /// A temporary failure: back to <see cref="NotificationStatus.Pending"/> with the next attempt
+    /// scheduled, unless the attempts are exhausted.
+    /// </summary>
+    /// <returns><see langword="true"/> when the row was rescheduled, <see langword="false"/> when it dead-lettered.</returns>
+    public bool RescheduleOrDeadLetter(string error, DateTimeOffset now)
+    {
+        EnsureProcessing();
+
+        if (Attempts >= MaxAttempts)
+        {
+            SendToDeadLetter(error, now);
+            return false;
+        }
+
+        Status = NotificationStatus.Pending;
+        NextAttemptAt = now.Add(RetryBackoff[Math.Min(Attempts - 1, RetryBackoff.Count - 1)]);
+        LastError = Truncate(error);
+        LockedAt = null;
+        LockedBy = null;
+
+        return true;
+    }
+
+    /// <summary>
+    /// A permanent failure: no retry at all (<c>NTF-013</c>).
+    /// </summary>
+    /// <remarks>
+    /// An invalid address or a blocked bot will not become valid by waiting, and five retries against
+    /// a mailbox that does not exist is five more chances to be treated as a spammer.
+    /// </remarks>
+    public void SendToDeadLetter(string error, DateTimeOffset now)
+    {
+        EnsureProcessing();
+
+        Status = NotificationStatus.DeadLetter;
+        LastError = Truncate(error);
+        LockedAt = null;
+        LockedBy = null;
+    }
+
+    /// <summary>
+    /// Returns a row whose lease has expired to the queue (<c>NTF-012</c>).
+    /// </summary>
+    /// <remarks>
+    /// A process killed mid-send leaves its rows in <c>Processing</c> forever otherwise. The attempt is
+    /// <b>not</b> given back: the send may well have reached the provider before the process died, and
+    /// counting it protects against an unbounded loop of half-deliveries.
+    /// </remarks>
+    public void ReleaseExpiredLease(DateTimeOffset now)
+    {
+        if (Status is not NotificationStatus.Processing)
+        {
+            return;
+        }
+
+        Status = Attempts >= MaxAttempts ? NotificationStatus.DeadLetter : NotificationStatus.Pending;
+        LastError = Truncate("Обработка прервана: истёк срок блокировки worker'а.");
+        NextAttemptAt = now;
+        LockedAt = null;
+        LockedBy = null;
+    }
+
+    /// <summary>
+    /// Admin's manual retry (<c>NTF-014</c>): only from the dead letter, and the counter starts over.
+    /// </summary>
+    /// <remarks>
+    /// Resetting <see cref="Attempts"/> is deliberate. A manual retry follows a human decision that the
+    /// cause has been dealt with — a mailbox fixed, a provider restored — so the row deserves the full
+    /// budget rather than the one attempt its history left it.
+    /// </remarks>
+    public void RequeueByAdmin(DateTimeOffset now)
+    {
+        if (Status is not NotificationStatus.DeadLetter)
+        {
+            throw new DomainException(
+                DomainErrorCodes.ValidationFailed,
+                "Повторная отправка доступна только для записей в DeadLetter.");
+        }
+
+        Status = NotificationStatus.Pending;
+        Attempts = 0;
+        NextAttemptAt = now;
+        LastError = null;
+        LockedAt = null;
+        LockedBy = null;
+    }
+
+    private void EnsureProcessing()
+    {
+        if (Status is not NotificationStatus.Processing)
+        {
+            throw new DomainException(
+                DomainErrorCodes.ValidationFailed,
+                $"Операция допустима только для записи в статусе Processing, а не {Status}.");
+        }
+    }
+
+    private static string Truncate(string error) =>
+        error.Length <= LastErrorMaxLength ? error : error[..LastErrorMaxLength];
 }

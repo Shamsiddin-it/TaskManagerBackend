@@ -242,7 +242,7 @@ public sealed class AssignmentService(
                 currentDueAt = assignment.CurrentDueAt,
             }));
 
-        NotifyAssignee(assignment, NotificationEventTypes.AssignmentAssigned, $"assigned:{assignment.Id:N}");
+        await NotifyAssigneeAsync(assignment, NotificationEventTypes.AssignmentAssigned, cancellationToken);
 
         await dbContext.SaveWithConcurrencyCheckAsync(assignment, cancellationToken);
 
@@ -276,7 +276,7 @@ public sealed class AssignmentService(
                 currentDueAt = assignment.CurrentDueAt,
             }));
 
-        NotifyAssignee(assignment, NotificationEventTypes.AssignmentAssigned, $"assigned:{assignment.Id:N}");
+        await NotifyAssigneeAsync(assignment, NotificationEventTypes.AssignmentAssigned, cancellationToken);
 
         await dbContext.SaveWithConcurrencyCheckAsync(assignment, cancellationToken);
 
@@ -314,11 +314,13 @@ public sealed class AssignmentService(
         // changed hands (Приложение B).
         if (wasPublished)
         {
-            NotifyUser(assignment, previousAssigneeId, NotificationEventTypes.AssignmentReassigned,
-                $"reassigned:{assignment.Id:N}:{assignment.LastEventSequence}:{previousAssigneeId:N}");
+            // The sequence number keeps a second reassignment of the same task from being deduplicated
+            // against the first, and the recipient keeps the two halves of one reassignment apart.
+            await NotifyUserAsync(assignment, previousAssigneeId, NotificationEventTypes.AssignmentReassigned,
+                cancellationToken, $"{assignment.LastEventSequence}:{previousAssigneeId:N}");
 
-            NotifyAssignee(assignment, NotificationEventTypes.AssignmentReassigned,
-                $"reassigned:{assignment.Id:N}:{assignment.LastEventSequence}:{assignment.AssignedToId:N}");
+            await NotifyAssigneeAsync(assignment, NotificationEventTypes.AssignmentReassigned,
+                cancellationToken, $"{assignment.LastEventSequence}:{assignment.AssignedToId:N}");
         }
 
         await dbContext.SaveWithConcurrencyCheckAsync(assignment, cancellationToken);
@@ -369,7 +371,7 @@ public sealed class AssignmentService(
         // theirs (Приложение B, transitions 2 and 4).
         if (previous is not (AssignmentStatus.Draft or AssignmentStatus.Suggested))
         {
-            NotifyAssignee(assignment, NotificationEventTypes.AssignmentCancelled, $"cancelled:{assignment.Id:N}");
+            await NotifyAssigneeAsync(assignment, NotificationEventTypes.AssignmentCancelled, cancellationToken);
         }
 
         // ASN-025: a force-cancel is the single administrative action inside the study cycle, so it is
@@ -426,17 +428,33 @@ public sealed class AssignmentService(
             now,
             metadata));
 
-    private void NotifyAssignee(Assignment assignment, string eventType, string deduplicationKey) =>
-        NotifyUser(assignment, assignment.AssignedToId, eventType, deduplicationKey);
+    private Task NotifyAssigneeAsync(
+        Assignment assignment,
+        string eventType,
+        CancellationToken cancellationToken,
+        string? discriminator = null) =>
+        NotifyUserAsync(assignment, assignment.AssignedToId, eventType, cancellationToken, discriminator);
 
-    private void NotifyUser(Assignment assignment, Guid recipientId, string eventType, string deduplicationKey) =>
-        outboxWriter.EnqueueSystem(
+    /// <summary>
+    /// Enqueues one notification about an assignment.
+    /// </summary>
+    /// <remarks>
+    /// The deduplication key is built by the writer from the template of <c>NTF-015</c>; the caller
+    /// supplies only the discriminator when one event can legitimately repeat on one object.
+    /// </remarks>
+    private Task NotifyUserAsync(
+        Assignment assignment,
+        Guid recipientId,
+        string eventType,
+        CancellationToken cancellationToken,
+        string? discriminator = null) =>
+        outboxWriter.EnqueueSystemAsync(
             new OutboxEntry
             {
                 RecipientUserId = recipientId,
                 EventType = eventType,
-                Channel = NotificationChannel.Email,
-                DeduplicationKey = deduplicationKey,
+                EntityId = assignment.Id,
+                Discriminator = discriminator,
                 CategoryId = assignment.CategoryId,
 
                 // No identifiers beyond what the recipient already owns, and no deadline arithmetic:
@@ -448,7 +466,8 @@ public sealed class AssignmentService(
                 }),
             },
             assignment.OrganizationId,
-            assignment.BranchId);
+            assignment.BranchId,
+            cancellationToken);
 
     // -----------------------------------------------------------------
     // Scope and guards

@@ -102,6 +102,11 @@ services:
       Storage__SecretKey: "minioadmin"
       Storage__Bucket: "mentortaskflow"
       Storage__EnsureBucketOnStartup: "true"
+      # One process locally, so it both serves and drains. mailhog captures everything it sends.
+      Notifications__EnableWorker: "true"
+      Notifications__SmtpHost: "mailhog"
+      Notifications__SmtpPort: "1025"
+      Notifications__AppBaseUrl: "http://localhost:5173"
     ports:
       - "5000:8080"
 

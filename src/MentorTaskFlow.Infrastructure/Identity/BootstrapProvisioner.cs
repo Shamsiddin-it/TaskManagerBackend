@@ -106,13 +106,12 @@ public sealed class BootstrapProvisioner(
             // Steps 5 and 6 of DEPLOY-030. Both carry BranchId = NULL: the first administrator is an
             // Organization Admin who belongs to no branch, so the invitation and the provisioning
             // record are organization-level by construction (TEN-042, TEN-048).
-            outboxWriter.EnqueueSystem(
+            await outboxWriter.EnqueueSystemAsync(
                 new OutboxEntry
                 {
                     RecipientUserId = admin.Id,
                     EventType = NotificationEventTypes.UserInvitation,
-                    Channel = NotificationChannel.Email,
-                    DeduplicationKey = $"invitation:{admin.Id:N}",
+                    EntityId = admin.Id,
 
                     // The payload names the organization but carries no token and no link: NTF-017
                     // forbids putting either in a notification payload, and the renderer builds the
@@ -124,7 +123,8 @@ public sealed class BootstrapProvisioner(
                     }),
                 },
                 organization.Id,
-                branchId: null);
+                branchId: null,
+                cancellationToken);
 
             auditWriter.WriteSystem(
                 new AuditEntry

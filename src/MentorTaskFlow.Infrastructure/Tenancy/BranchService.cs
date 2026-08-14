@@ -400,16 +400,16 @@ public sealed class BranchService(
 
         foreach (var recipientId in recipients)
         {
-            outboxWriter.EnqueueSystem(
+            await outboxWriter.EnqueueSystemAsync(
                 new OutboxEntry
                 {
                     RecipientUserId = recipientId,
                     EventType = eventType,
-                    Channel = NotificationChannel.Email,
+                    EntityId = branch.Id,
 
-                    // The key names the branch, the recipient and the day, so a repeated activation
-                    // within one day does not send twice (Приложение E).
-                    DeduplicationKey = $"{eventType}:{branch.Id:N}:{recipientId:N}:{localDate}",
+                    // The recipient and the day, so a repeated activation within one day does not send
+                    // twice (Приложение E). The branch is already in the key's scope prefix.
+                    Discriminator = $"{recipientId:N}:{localDate}",
                     Payload = JsonSerializer.SerializeToDocument(new
                     {
                         branchName = branch.Name,
@@ -417,7 +417,8 @@ public sealed class BranchService(
                     }),
                 },
                 branch.OrganizationId,
-                branch.Id);
+                branch.Id,
+                cancellationToken);
         }
     }
 
