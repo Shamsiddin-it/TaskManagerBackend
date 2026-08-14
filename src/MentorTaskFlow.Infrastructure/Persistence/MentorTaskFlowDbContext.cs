@@ -5,6 +5,7 @@ using MentorTaskFlow.Domain.Categories;
 using MentorTaskFlow.Domain.Identity;
 using MentorTaskFlow.Domain.Notifications;
 using MentorTaskFlow.Domain.Schedule;
+using MentorTaskFlow.Domain.Submissions;
 using MentorTaskFlow.Domain.Tenancy;
 using MentorTaskFlow.Domain.Users;
 using Microsoft.EntityFrameworkCore;
@@ -57,6 +58,8 @@ public class MentorTaskFlowDbContext(
     public DbSet<Assignment> Assignments => Set<Assignment>();
 
     public DbSet<TaskEvent> TaskEvents => Set<TaskEvent>();
+
+    public DbSet<Submission> Submissions => Set<Submission>();
 
     public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
 
@@ -132,6 +135,12 @@ public class MentorTaskFlowDbContext(
                 && (FilterBranchId == null || e.BranchId == FilterBranchId)));
 
         modelBuilder.Entity<TaskEvent>().HasQueryFilter(e =>
+            FilterSuppressed
+            || (FilterOrganizationId != null
+                && e.OrganizationId == FilterOrganizationId
+                && (FilterBranchId == null || e.BranchId == FilterBranchId)));
+
+        modelBuilder.Entity<Submission>().HasQueryFilter(e =>
             FilterSuppressed
             || (FilterOrganizationId != null
                 && e.OrganizationId == FilterOrganizationId

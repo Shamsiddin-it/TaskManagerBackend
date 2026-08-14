@@ -83,6 +83,8 @@ services:
         condition: service_healthy
       migrator:
         condition: service_completed_successfully
+      minio:
+        condition: service_healthy
     environment:
       ASPNETCORE_ENVIRONMENT: Development
       ConnectionStrings__DefaultConnection: "Host=postgres;Port=5432;Database=mentortaskflow;Username=mentortaskflow_app;Password=mentortaskflow_dev"
@@ -92,6 +94,14 @@ services:
       Cors__AllowedOrigins__0: "http://localhost:5173"
       Auth__JwtSigningKey: "${AUTH__JWT_SIGNING_KEY:-local-development-signing-key-not-for-any-real-deployment}"
       Auth__AppBaseUrl: "http://localhost:5173"
+      # The presigned URL is followed by the developer's browser, not by the API, so the endpoint has
+      # to be the address the host can reach — the compose service name would resolve only inside the
+      # network and every download would fail from outside it.
+      Storage__Endpoint: "http://localhost:9000"
+      Storage__AccessKey: "minioadmin"
+      Storage__SecretKey: "minioadmin"
+      Storage__Bucket: "mentortaskflow"
+      Storage__EnsureBucketOnStartup: "true"
     ports:
       - "5000:8080"
 

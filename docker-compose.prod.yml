@@ -71,6 +71,14 @@ services:
       Hangfire__EnableServer: "false"
       Cors__AllowedOrigins__0: ${CORS_ALLOWED_ORIGIN}
       AUTH__JWT_SIGNING_KEY: ${AUTH_JWT_SIGNING_KEY}
+      # The endpoint is the address a browser reaches, since the presigned URL is followed by the
+      # client, not by the API. Credentials come from the environment and never from a committed file
+      # (SEC-010); the bucket is created by deployment, not at startup.
+      Storage__Endpoint: ${STORAGE_ENDPOINT}
+      Storage__AccessKey: ${STORAGE_ACCESS_KEY}
+      Storage__SecretKey: ${STORAGE_SECRET_KEY}
+      Storage__Bucket: ${STORAGE_BUCKET}
+      Storage__UseSsl: "true"
     ports:
       - "8080:8080"
     healthcheck:

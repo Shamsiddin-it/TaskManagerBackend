@@ -62,6 +62,31 @@ public sealed class BranchContextRequiredException()
         ErrorCodes.BranchContextRequired,
         "Не выбран филиал для операции. Передайте заголовок X-MTF-Branch-Id.");
 
+/// <summary>
+/// 413. The upload exceeded the size limit (<c>SUB-012</c>).
+/// </summary>
+/// <remarks>
+/// Raised on bytes actually read, not on <c>Content-Length</c>: a client controls its own headers, so
+/// a limit checked only against the declared length is not a limit.
+/// </remarks>
+public sealed class PayloadTooLargeException(string code, string? detail = null)
+    : AppException(code, detail ?? "Размер запроса превышает допустимый.");
+
+/// <summary>415. The extension or declared MIME type is outside the allowlist (<c>SUB-011</c>).</summary>
+public sealed class UnsupportedMediaTypeException(string code, string? detail = null)
+    : AppException(code, detail ?? "Тип файла не поддерживается.");
+
+/// <summary>
+/// 422. The file arrived intact but is not what it claims to be — a broken signature, an OPC container
+/// missing its parts, or an archive breaching the safety limits (17.3).
+/// </summary>
+public sealed class UnprocessableEntityException(string code, string? detail = null)
+    : AppException(code, detail ?? "Содержимое файла не прошло проверку.");
+
+/// <summary>503. A dependency the request cannot proceed without is unreachable (<c>REL-008</c>).</summary>
+public sealed class ServiceUnavailableException(string code, string? detail = null)
+    : AppException(code, detail ?? "Сервис временно недоступен.");
+
 /// <summary>409. The caller may perform the action, but the current resource state forbids it (TZ 9.4).</summary>
 public sealed class ConflictException(string code, string? detail = null, IReadOnlyDictionary<string, object?>? details = null)
     : AppException(code, detail ?? "Текущее состояние ресурса не допускает операцию.", details);
