@@ -1,3 +1,5 @@
+using Amazon.S3;
+using Amazon.S3.Model;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -161,6 +163,8 @@ if (!string.IsNullOrWhiteSpace(connectionString))
     healthChecks.AddNpgSql(connectionString, name: "postgres", tags: ["ready"]);
 }
 
+healthChecks.AddCheck<StorageHealthCheck>("storage", tags: ["ready"]);
+
 var app = builder.Build();
 
 // ---------------------------------------------------------------------------
@@ -201,6 +205,22 @@ if (app.Services.GetRequiredService<IOptions<DatabaseOptions>>().Value.MigrateOn
 {
     using var scope = app.Services.CreateScope();
     await scope.ServiceProvider.GetRequiredService<MentorTaskFlowDbContext>().Database.MigrateAsync();
+}
+
+// ---------------------------------------------------------------------------
+// Bucket creation. Development and Test only, and off by default: in a real
+// deployment the bucket exists with its policy already applied, and creating one
+// from the API would give the application role a permission it must not have
+// (SEC-013).
+// ---------------------------------------------------------------------------
+if (app.Services.GetRequiredService<IOptions<StorageOptions>>().Value is { EnsureBucketOnStartup: true } storage)
+{
+    var s3 = app.Services.GetRequiredService<IAmazonS3>();
+
+    if (!await Amazon.S3.Util.AmazonS3Util.DoesS3BucketExistV2Async(s3, storage.Bucket))
+    {
+        await s3.PutBucketAsync(new PutBucketRequest { BucketName = storage.Bucket });
+    }
 }
 
 // ---------------------------------------------------------------------------

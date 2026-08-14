@@ -37,6 +37,16 @@ public sealed class MentorTaskFlowApiFactory : WebApplicationFactory<Program>
     /// <summary>Points the API at a live database when a test needs real persistence.</summary>
     public string? ConnectionStringOverride { get; init; }
 
+    /// <summary>
+    /// Points the API at a live MinIO when a test needs real storage.
+    /// </summary>
+    /// <remarks>
+    /// Unset, the storage options are still filled with a syntactically valid but unreachable
+    /// endpoint. <c>StorageOptions</c> is validated at startup, so leaving the credentials blank would
+    /// stop every test in the suite from booting — including the ones that never touch a file.
+    /// </remarks>
+    public string? StorageEndpointOverride { get; init; }
+
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         builder.UseEnvironment("Development");
@@ -52,6 +62,11 @@ public sealed class MentorTaskFlowApiFactory : WebApplicationFactory<Program>
                 ["Auth:JwtIssuer"] = "mentortaskflow-tests",
                 ["Auth:JwtAudience"] = "mentortaskflow-tests-api",
                 ["Auth:AppBaseUrl"] = AllowedOrigin,
+
+                ["Storage:Endpoint"] = StorageEndpointOverride ?? "http://127.0.0.1:1",
+                ["Storage:AccessKey"] = Persistence.MinioFixture.AccessKey,
+                ["Storage:SecretKey"] = Persistence.MinioFixture.SecretKey,
+                ["Storage:Bucket"] = Persistence.MinioFixture.Bucket,
             });
         });
     }

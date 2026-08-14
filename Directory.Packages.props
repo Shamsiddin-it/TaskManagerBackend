@@ -36,6 +36,15 @@
     <PackageVersion Include="AspNetCore.HealthChecks.NpgSql" Version="9.0.0" />
   </ItemGroup>
 
+  <ItemGroup Label="Storage">
+    <!--
+      The AWS SDK rather than the MinIO client: the TZ specifies "S3-compatible storage (MinIO)", and
+      presigned URLs with response-header overrides — which SEC-017 needs to force
+      Content-Disposition per request — are first-class here.
+    -->
+    <PackageVersion Include="AWSSDK.S3" Version="4.0.10" />
+  </ItemGroup>
+
   <ItemGroup Label="Testing">
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
     <PackageVersion Include="xunit" Version="2.9.3" />
@@ -44,6 +53,8 @@
     <PackageVersion Include="Shouldly" Version="4.3.0" />
     <PackageVersion Include="NetArchTest.Rules" Version="1.3.2" />
     <PackageVersion Include="Testcontainers.PostgreSql" Version="4.13.0" />
+    <!-- TEST-004: a real MinIO, not a fake. Presigned URLs and bucket policy are what is being tested. -->
+    <PackageVersion Include="Testcontainers.Minio" Version="4.13.0" />
     <!--
       Transitive pin. Testcontainers 4.13.0 — the latest release — still resolves SSH.NET 2025.1.0,
       which carries GHSA-q939-rpr3-3284 (High): ScpClient.Download() writes remote-supplied paths

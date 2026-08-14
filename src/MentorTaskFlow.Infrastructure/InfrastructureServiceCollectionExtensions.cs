@@ -1,3 +1,5 @@
+using Amazon.Runtime;
+using Amazon.S3;
 using MentorTaskFlow.Application.Common.Abstractions;
 using MentorTaskFlow.Application.Common.Security;
 using MentorTaskFlow.Application.Common.Tenancy;
@@ -8,6 +10,8 @@ using MentorTaskFlow.Infrastructure.Common;
 using MentorTaskFlow.Infrastructure.Identity;
 using MentorTaskFlow.Infrastructure.Notifications;
 using MentorTaskFlow.Infrastructure.Schedule;
+using MentorTaskFlow.Infrastructure.Storage;
+using MentorTaskFlow.Infrastructure.Submissions;
 using MentorTaskFlow.Infrastructure.Tenancy;
 using MentorTaskFlow.Infrastructure.Users;
 using MentorTaskFlow.Infrastructure.Observability;
@@ -95,8 +99,44 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddSingleton<IDeadlineCalculator, DeadlineCalculator>();
 
         AddIdentity(services, configuration);
+        AddStorage(services, configuration);
 
         return services;
+    }
+
+    /// <summary>Object storage and the file limits of TZ 17.</summary>
+    private static void AddStorage(IServiceCollection services, IConfiguration configuration)
+    {
+        services.AddOptions<StorageOptions>()
+            .Bind(configuration.GetSection(StorageOptions.SectionName))
+            .ValidateDataAnnotations()
+            .ValidateOnStart();
+
+        // Built from the provider rather than from a captured snapshot, for the same reason the
+        // DbContext is: credentials arrive from the environment and may be registered after this call.
+        services.AddSingleton<IAmazonS3>(serviceProvider =>
+        {
+            var options = serviceProvider.GetRequiredService<IOptions<StorageOptions>>().Value;
+
+            return new AmazonS3Client(
+                new BasicAWSCredentials(options.AccessKey, options.SecretKey),
+                new AmazonS3Config
+                {
+                    ServiceURL = options.Endpoint,
+
+                    // MinIO addresses buckets by path; virtual-host style would need DNS per bucket.
+                    ForcePathStyle = options.UsePathStyle,
+                    UseHttp = !options.UseSsl,
+
+                    // MinIO is not a region-based service, but the SDK requires the field to be set
+                    // before it will sign a request at all.
+                    AuthenticationRegion = "us-east-1",
+                });
+        });
+
+        services.AddScoped<IFileStorage, S3FileStorage>();
+        services.AddSingleton<UploadedFileInspector>();
+        services.AddScoped<ISubmissionService, SubmissionService>();
     }
 
     /// <summary>Authentication services of TZ 16.</summary>

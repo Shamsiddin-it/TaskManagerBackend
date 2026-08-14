@@ -77,7 +77,7 @@ public sealed class PostgresFixture : IAsyncLifetime
         await using var connection = await OpenRawConnectionAsync();
         await using var command = connection.CreateCommand();
         command.CommandText = """
-            TRUNCATE TABLE user_branch_history, user_category_history, category_settings,
+            TRUNCATE TABLE submissions, user_branch_history, user_category_history, category_settings,
                            users, categories, branches, organizations
             RESTART IDENTITY CASCADE;
             """;
@@ -85,8 +85,16 @@ public sealed class PostgresFixture : IAsyncLifetime
     }
 }
 
+/// <summary>
+/// The shared infrastructure of the integration suite: PostgreSQL, and MinIO from Phase 10.
+/// </summary>
+/// <remarks>
+/// Both containers are collection fixtures, so each starts once for the whole run rather than once per
+/// test class. A class that needs storage injects <see cref="MinioFixture"/> alongside
+/// <see cref="PostgresFixture"/>; the rest ignore it.
+/// </remarks>
 [CollectionDefinition(Name)]
-public sealed class PostgresCollection : ICollectionFixture<PostgresFixture>
+public sealed class PostgresCollection : ICollectionFixture<PostgresFixture>, ICollectionFixture<MinioFixture>
 {
     public const string Name = "postgres";
 }
