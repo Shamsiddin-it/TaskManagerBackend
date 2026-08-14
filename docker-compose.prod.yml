@@ -100,6 +100,17 @@ services:
       Database__MigrateOnStartup: "false"
       Hangfire__EnableServer: "true"
       AUTH__JWT_SIGNING_KEY: ${AUTH_JWT_SIGNING_KEY}
+      # The queue is drained here and nowhere else. Several replicas would not corrupt anything —
+      # SKIP LOCKED sees to that — but they would multiply the load on the mail provider for no
+      # benefit (DEPLOY-013).
+      Notifications__EnableWorker: "true"
+      Notifications__SmtpHost: ${SMTP_HOST}
+      Notifications__SmtpPort: ${SMTP_PORT}
+      Notifications__SmtpUser: ${SMTP_USER}
+      Notifications__SmtpPassword: ${SMTP_PASSWORD}
+      Notifications__SmtpUseSsl: "true"
+      Notifications__FromAddress: ${SMTP_FROM_ADDRESS}
+      Notifications__AppBaseUrl: ${CORS_ALLOWED_ORIGIN}
     restart: unless-stopped
 
 volumes:

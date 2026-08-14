@@ -314,15 +314,18 @@ public sealed class SubmissionService(
             return;
         }
 
-        outboxWriter.EnqueueSystem(
+        await outboxWriter.EnqueueSystemAsync(
             new OutboxEntry
             {
                 RecipientUserId = recipient,
                 EventType = submission.IsLate
                     ? NotificationEventTypes.LateSubmissionUploaded
                     : NotificationEventTypes.SubmissionUploaded,
-                Channel = NotificationChannel.Email,
-                DeduplicationKey = $"submission:{submission.Id:N}",
+                EntityId = assignment.Id,
+
+                // The version keeps the notification about version 2 from being deduplicated against
+                // the one about version 1 (NTF-015).
+                Discriminator = submission.VersionNumber.ToString(),
                 CategoryId = assignment.CategoryId,
                 Payload = JsonSerializer.SerializeToDocument(new
                 {
@@ -332,7 +335,8 @@ public sealed class SubmissionService(
                 }),
             },
             assignment.OrganizationId,
-            assignment.BranchId);
+            assignment.BranchId,
+            cancellationToken);
     }
 
     // -----------------------------------------------------------------

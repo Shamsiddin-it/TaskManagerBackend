@@ -499,18 +499,22 @@ public sealed class UserService(
 
         WriteTransferAudit(user, previousBranchId, previousCategoryId, newCategoryId, reason);
 
-        outboxWriter.EnqueueSystem(
+        await outboxWriter.EnqueueSystemAsync(
             new OutboxEntry
             {
                 RecipientUserId = user.Id,
                 EventType = NotificationEventTypes.UserBranchChanged,
-                Channel = NotificationChannel.Email,
-                DeduplicationKey = $"branch-changed:{user.Id:N}:{correlationId:N}",
+                EntityId = user.Id,
+
+                // A second transfer of the same person is a different event; the correlation id of
+                // this one keeps the two apart (NTF-015).
+                Discriminator = correlationId.ToString("N"),
                 CategoryId = newCategoryId,
                 Payload = JsonSerializer.SerializeToDocument(new { reason }),
             },
             user.OrganizationId,
-            request.NewBranchId);
+            request.NewBranchId,
+            cancellationToken);
 
         await SaveTranslatingConstraintsAsync(cancellationToken, user);
         await transaction.CommitAsync(cancellationToken);
@@ -993,16 +997,16 @@ public sealed class UserService(
                 .FirstOrDefaultAsync(cancellationToken)
             : null;
 
-        outboxWriter.EnqueueSystem(
+        await outboxWriter.EnqueueSystemAsync(
             new OutboxEntry
             {
                 RecipientUserId = user.Id,
                 EventType = NotificationEventTypes.UserInvitation,
-                Channel = NotificationChannel.Email,
+                EntityId = user.Id,
 
                 // Keyed by the moment of issue, so a resend produces a new message rather than being
                 // swallowed by the deduplication index.
-                DeduplicationKey = $"invitation:{user.Id:N}:{clock.UtcNow.UtcDateTime:O}",
+                Discriminator = clock.UtcNow.UtcDateTime.ToString("O"),
                 CategoryId = user.CategoryId,
                 Payload = JsonSerializer.SerializeToDocument(new
                 {
@@ -1013,7 +1017,8 @@ public sealed class UserService(
                 }),
             },
             user.OrganizationId,
-            user.BranchId);
+            user.BranchId,
+            cancellationToken);
     }
 
     /// <summary>
@@ -1038,10 +1043,13 @@ public sealed class UserService(
 
             if (!hasAnotherLead)
             {
+                // The date alone: the event type, the organization, the branch and the subject are
+                // already segments of the key, so one alert per category per day follows without
+                // repeating any of them (NTF-015).
                 await EnqueueToAdminsAsync(
                     user,
                     NotificationEventTypes.CategoryWithoutLead,
-                    $"category-no-lead:{categoryId:N}:{localDate}",
+                    localDate,
                     cancellationToken);
             }
         }
@@ -1063,7 +1071,7 @@ public sealed class UserService(
                 await EnqueueToAdminsAsync(
                     user,
                     NotificationEventTypes.BranchWithoutAdmin,
-                    $"branch-no-admin:{branchId:N}:{localDate}",
+                    localDate,
                     cancellationToken);
             }
         }
@@ -1072,7 +1080,7 @@ public sealed class UserService(
     private async Task EnqueueToAdminsAsync(
         User subject,
         string eventType,
-        string deduplicationKey,
+        string discriminator,
         CancellationToken cancellationToken)
     {
         // BranchWithoutAdmin is organization-level and therefore addressed to the organization
@@ -1090,18 +1098,19 @@ public sealed class UserService(
 
         foreach (var recipientId in recipients)
         {
-            outboxWriter.EnqueueSystem(
+            await outboxWriter.EnqueueSystemAsync(
                 new OutboxEntry
                 {
                     RecipientUserId = recipientId,
                     EventType = eventType,
-                    Channel = NotificationChannel.Email,
-                    DeduplicationKey = $"{deduplicationKey}:{recipientId:N}",
+                    EntityId = subject.Id,
+                    Discriminator = $"{discriminator}:{recipientId:N}",
                     CategoryId = organizationLevel ? null : subject.CategoryId,
                     Payload = JsonSerializer.SerializeToDocument(new { subjectFullName = subject.FullName }),
                 },
                 subject.OrganizationId,
-                organizationLevel ? null : subject.BranchId);
+                organizationLevel ? null : subject.BranchId,
+                cancellationToken);
         }
     }
 

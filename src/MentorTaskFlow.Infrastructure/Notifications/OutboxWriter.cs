@@ -1,7 +1,9 @@
 using MentorTaskFlow.Application.Common.Abstractions;
 using MentorTaskFlow.Application.Common.Tenancy;
 using MentorTaskFlow.Domain.Notifications;
+using MentorTaskFlow.Infrastructure.Observability;
 using MentorTaskFlow.Infrastructure.Persistence;
+using Microsoft.EntityFrameworkCore;
 
 namespace MentorTaskFlow.Infrastructure.Notifications;
 
@@ -9,45 +11,144 @@ namespace MentorTaskFlow.Infrastructure.Notifications;
 public sealed class OutboxWriter(
     MentorTaskFlowDbContext dbContext,
     IBranchContext branchContext,
+    NotificationMetrics metrics,
     IClock clock) : IOutboxWriter
 {
-    public void Enqueue(OutboxEntry entry)
+    public Task EnqueueAsync(OutboxEntry entry, CancellationToken cancellationToken)
     {
         var branchId = NotificationEventTypes.OrganizationLevelEvents.Contains(entry.EventType)
             ? null
             : branchContext.EffectiveBranchId;
 
-        Add(entry, branchContext.EffectiveOrganizationId, branchId);
+        return AddAsync(entry, branchContext.EffectiveOrganizationId, branchId, cancellationToken);
     }
 
-    public void EnqueueSystem(OutboxEntry entry, Guid organizationId, Guid? branchId) =>
-        Add(entry, organizationId, branchId);
+    public Task EnqueueSystemAsync(
+        OutboxEntry entry,
+        Guid organizationId,
+        Guid? branchId,
+        CancellationToken cancellationToken) =>
+        AddAsync(entry, organizationId, branchId, cancellationToken);
 
-    private void Add(OutboxEntry entry, Guid organizationId, Guid? branchId)
+    /// <summary>
+    /// Expands one logical event into the rows its channel policy calls for (18.1).
+    /// </summary>
+    /// <remarks>
+    /// <c>TelegramPreferred</c> is the case worth spelling out: a Telegram row is written when the
+    /// recipient has a binding, and an email row when they do not. The absence of a binding is not an
+    /// error and not a dead letter — it is counted and the message goes by mail instead, which is
+    /// exactly what keeps a person who never connected Telegram from silently receiving nothing
+    /// (<c>NTF-001</c>, <c>NTF-002</c>).
+    /// </remarks>
+    private async Task AddAsync(
+        OutboxEntry entry,
+        Guid organizationId,
+        Guid? branchId,
+        CancellationToken cancellationToken)
     {
-        dbContext.NotificationOutbox.Add(NotificationOutbox.Enqueue(
-            entry.RecipientUserId,
-            organizationId,
-            branchId,
-            entry.CategoryId,
-            entry.Channel,
-            entry.EventType,
-            entry.Payload,
-            BuildDeduplicationKey(organizationId, branchId, entry),
-            clock.UtcNow,
-            entry.IsSystemAlert));
+        var policy = ChannelPolicies.For(entry.EventType);
+        var now = clock.UtcNow;
+
+        var telegramBound = policy is not ChannelPolicy.EmailOnly
+                            && await HasTelegramAsync(entry.RecipientUserId, cancellationToken);
+
+        foreach (var channel in ResolveChannels(policy, telegramBound, entry.EventType))
+        {
+            var key = DeduplicationKey.Build(
+                organizationId,
+                branchId,
+                entry.EventType,
+                entry.EntityId,
+                channel,
+                entry.Discriminator);
+
+            // The duplicate is skipped rather than allowed to fail: a repeated notification must not
+            // roll back the business event it travels with (NTF-009). The unique index remains the
+            // final guard for the race this check cannot close.
+            if (await ExistsAsync(key, cancellationToken))
+            {
+                continue;
+            }
+
+            dbContext.NotificationOutbox.Add(NotificationOutbox.Enqueue(
+                entry.RecipientUserId,
+                organizationId,
+                branchId,
+                entry.CategoryId,
+                channel,
+                entry.EventType,
+                entry.Payload,
+                key,
+                now,
+                entry.IsSystemAlert));
+        }
     }
 
     /// <summary>
-    /// Prefixes the caller's key with the tenant scope (<c>NTF-015</c>).
+    /// Checks both the database and the rows already staged in this unit of work.
     /// </summary>
     /// <remarks>
-    /// Mandatory, not decorative. Without it, `category-no-lead` for the `C#` category of the head
-    /// office and the same event for the `C#` category of the Khujand branch would produce identical
-    /// keys, collide on <c>ux_notification_outbox_dedup</c>, and one branch's notification would
-    /// <b>silently suppress</b> the other's — the most dangerous class of defect, because it never
-    /// surfaces as an error (<c>TEN-043</c>).
+    /// The change tracker matters as much as the table: two enqueues in one transaction — the same
+    /// event raised for a recipient twice — would otherwise both pass the database check and collide
+    /// at commit.
     /// </remarks>
-    private static string BuildDeduplicationKey(Guid organizationId, Guid? branchId, OutboxEntry entry) =>
-        $"{organizationId:N}:{(branchId is { } id ? id.ToString("N") : "org")}:{entry.DeduplicationKey}";
+    private async Task<bool> ExistsAsync(string key, CancellationToken cancellationToken)
+    {
+        var staged = dbContext.ChangeTracker
+            .Entries<NotificationOutbox>()
+            .Any(e => e.State is EntityState.Added && e.Entity.DeduplicationKey == key);
+
+        return staged || await dbContext.NotificationOutbox
+            .IgnoreQueryFilters()
+            .AsNoTracking()
+            .AnyAsync(n => n.DeduplicationKey == key, cancellationToken);
+    }
+
+    private IEnumerable<NotificationChannel> ResolveChannels(
+        ChannelPolicy policy,
+        bool telegramBound,
+        string eventType)
+    {
+        switch (policy)
+        {
+            case ChannelPolicy.EmailOnly:
+                yield return NotificationChannel.Email;
+                break;
+
+            case ChannelPolicy.TelegramPreferred:
+                if (telegramBound)
+                {
+                    yield return NotificationChannel.Telegram;
+                }
+                else
+                {
+                    metrics.SkippedTelegram(eventType);
+                    yield return NotificationChannel.Email;
+                }
+
+                break;
+
+            case ChannelPolicy.Both:
+                yield return NotificationChannel.Email;
+
+                // NTF-001: no Telegram row without a binding. Writing one would guarantee a failure
+                // that is neither the sender's fault nor worth retrying.
+                if (telegramBound)
+                {
+                    yield return NotificationChannel.Telegram;
+                }
+                else
+                {
+                    metrics.SkippedTelegram(eventType);
+                }
+
+                break;
+        }
+    }
+
+    private Task<bool> HasTelegramAsync(Guid userId, CancellationToken cancellationToken) =>
+        dbContext.Users
+            .IgnoreQueryFilters()
+            .AsNoTracking()
+            .AnyAsync(u => u.Id == userId && u.TelegramChatId != null, cancellationToken);
 }

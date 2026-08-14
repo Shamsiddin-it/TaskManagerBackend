@@ -131,7 +131,7 @@ public sealed class ReviewService(
             reviewId: review.Id,
             submissionId: submission.Id));
 
-        NotifyAssignee(assignment, review);
+        await NotifyAssigneeAsync(assignment, review, cancellationToken);
 
         await SaveTranslatingConstraintsAsync(assignment, cancellationToken);
         await transaction.CommitAsync(cancellationToken);
@@ -235,16 +235,19 @@ public sealed class ReviewService(
     /// the place for it; the notification says a decision exists and the interface shows it
     /// (<c>NTF-005</c>).
     /// </remarks>
-    private void NotifyAssignee(Assignment assignment, Review review) =>
-        outboxWriter.EnqueueSystem(
+    private Task NotifyAssigneeAsync(Assignment assignment, Review review, CancellationToken cancellationToken) =>
+        outboxWriter.EnqueueSystemAsync(
             new OutboxEntry
             {
                 RecipientUserId = assignment.AssignedToId,
                 EventType = review.Decision is ReviewDecision.Approved
                     ? NotificationEventTypes.ReviewApproved
                     : NotificationEventTypes.ReviewNeedsRework,
-                Channel = NotificationChannel.Email,
-                DeduplicationKey = $"review:{review.Id:N}",
+                EntityId = assignment.Id,
+
+                // The review identifier keeps the decision on a second version from being deduplicated
+                // against the decision on the first (NTF-015).
+                Discriminator = review.Id.ToString("N"),
                 CategoryId = assignment.CategoryId,
                 Payload = JsonSerializer.SerializeToDocument(new
                 {
@@ -253,7 +256,8 @@ public sealed class ReviewService(
                 }),
             },
             assignment.OrganizationId,
-            assignment.BranchId);
+            assignment.BranchId,
+            cancellationToken);
 
     /// <summary>
     /// <c>REV-005</c>: the unique index is the decision-maker, not a prior lookup.

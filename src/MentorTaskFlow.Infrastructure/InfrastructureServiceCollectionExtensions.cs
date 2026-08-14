@@ -87,7 +87,8 @@ public static class InfrastructureServiceCollectionExtensions
 
         services.AddScoped<IAuditWriter, AuditWriter>();
         services.AddScoped<IAuditLogReader, AuditLogReader>();
-        services.AddScoped<IOutboxWriter, OutboxWriter>();
+
+        AddNotifications(services, configuration);
 
         services.AddSingleton<ITimeZoneCatalog, TimeZoneCatalog>();
         services.AddScoped<ITenantStateGuard, TenantStateGuard>();
@@ -103,6 +104,25 @@ public static class InfrastructureServiceCollectionExtensions
         AddStorage(services, configuration);
 
         return services;
+    }
+
+    /// <summary>The outbox, its delivery channels and the worker that drains it (TZ 18).</summary>
+    private static void AddNotifications(IServiceCollection services, IConfiguration configuration)
+    {
+        services.AddOptions<NotificationOptions>()
+            .Bind(configuration.GetSection(NotificationOptions.SectionName))
+            .ValidateDataAnnotations()
+            .ValidateOnStart();
+
+        services.AddSingleton<NotificationMetrics>();
+        services.AddScoped<IOutboxWriter, OutboxWriter>();
+        services.AddScoped<INotificationAdminService, NotificationAdminService>();
+        services.AddScoped<OutboxDispatcher>();
+        services.AddScoped<INotificationSender, SmtpNotificationSender>();
+
+        // The loop is registered unconditionally and stops itself when the process is not the worker:
+        // whether background processing belongs here is configuration, not composition (DEPLOY-013).
+        services.AddHostedService<OutboxWorker>();
     }
 
     /// <summary>Object storage and the file limits of TZ 17.</summary>
