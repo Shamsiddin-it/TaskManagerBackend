@@ -81,6 +81,48 @@ public sealed record ChangeRoleRequest(
 /// <summary>Body of the activate and deactivate actions.</summary>
 public sealed record UserActionRequest(string ConcurrencyToken);
 
+/// <summary>
+/// <c>POST /users/{id}/change-category</c> — a move <b>within one branch</b> (TZ 15.2).
+/// </summary>
+/// <remarks>
+/// There is no branch field, and that is the point: a move that also changes branch is
+/// <see cref="ChangeBranchRequest"/>, a different operation with a different authorisation rule. The
+/// target category must belong to the user's current branch, otherwise 409
+/// <c>CROSS_SCOPE_REFERENCE</c> (<c>USER-037</c>).
+/// </remarks>
+public sealed record ChangeCategoryRequest(Guid NewCategoryId, string Reason, string ConcurrencyToken);
+
+/// <summary>
+/// <c>POST /users/{id}/change-branch</c> — Organization Admin only (TZ 39.6).
+/// </summary>
+/// <remarks>
+/// <c>newCategoryId</c> is mandatory for a Lead or Mentor and must be <c>null</c> for a Branch Admin:
+/// the four permitted scope shapes of <c>USER-023</c> leave no other combination
+/// (<c>BRN-037</c>).
+/// </remarks>
+public sealed record ChangeBranchRequest(
+    Guid NewBranchId,
+    string Reason,
+    string ConcurrencyToken,
+    Guid? NewCategoryId = null);
+
+/// <summary>
+/// The <c>reason</c> code carried by a blocked transfer.
+/// </summary>
+/// <remarks>
+/// <c>BRN-039</c> restricts the body of a 409 to the identifiers of the blocking assignments and a
+/// reason code — no task titles, no names, nothing else. The response exists so an administrator can
+/// navigate to what is in the way, not to report on it.
+/// </remarks>
+public static class TransferBlockReasons
+{
+    /// <summary>The user still holds assignments in a non-terminal status.</summary>
+    public const string ActiveAssignments = "ACTIVE_ASSIGNMENTS";
+
+    /// <summary>The user is the active Lead of their category (<c>USER-013</c>).</summary>
+    public const string ActiveLead = "ACTIVE_LEAD";
+}
+
 /// <summary>Filters for <c>GET /users</c> (<c>USER-010</c>).</summary>
 public sealed record UserListQuery
 {

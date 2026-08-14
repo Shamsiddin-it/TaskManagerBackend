@@ -131,12 +131,34 @@ public sealed class AssignmentService(
     // Transitions
     // -----------------------------------------------------------------
 
-    public async Task<AssignmentDto> CreateDraftAsync(CreateAssignmentDraftRequest request, CancellationToken cancellationToken)
+    public Task<AssignmentDto> CreateDraftAsync(CreateAssignmentDraftRequest request, CancellationToken cancellationToken)
+    {
+        var strategy = dbContext.Database.CreateExecutionStrategy();
+
+        return strategy.ExecuteAsync(() => CreateDraftCoreAsync(request, cancellationToken));
+    }
+
+    private async Task<AssignmentDto> CreateDraftCoreAsync(
+        CreateAssignmentDraftRequest request,
+        CancellationToken cancellationToken)
     {
         var actor = RequireLead();
         var categoryId = actor.CategoryId!.Value;
 
+        dbContext.ChangeTracker.Clear();
+        await using var transaction = await dbContext.Database.BeginTransactionAsync(cancellationToken);
+
         await tenantState.EnsureWritableAsync(actor.BranchId, categoryId, cancellationToken);
+
+        // FOR SHARE on the assignee, held to commit: the other half of the FOR UPDATE a transfer takes
+        // (scenarios 11 and 20 of Приложение K). Creation is the only way a mentor acquires work
+        // without an existing non-terminal task already blocking the transfer, so it is the only path
+        // where the two operations can both pass their own check and produce a task in a branch its
+        // executor has just left.
+        await dbContext.Database.ExecuteSqlAsync(
+            $"SELECT id FROM users WHERE id = {request.AssignedToId} FOR SHARE",
+            cancellationToken);
+
         await EnsureAssigneeIsUsableAsync(request.AssignedToId, categoryId, cancellationToken);
 
         var template = await ResolveTemplateAsync(request.TopicAssignmentId, categoryId, cancellationToken);
@@ -174,6 +196,7 @@ public sealed class AssignmentService(
             }));
 
         await dbContext.SaveChangesAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
 
         return ToDto(assignment, dbContext.Read(assignment), null);
     }
