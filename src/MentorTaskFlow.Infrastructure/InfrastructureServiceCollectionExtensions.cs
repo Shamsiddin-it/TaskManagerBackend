@@ -9,6 +9,7 @@ using MentorTaskFlow.Infrastructure.Categories;
 using MentorTaskFlow.Infrastructure.Common;
 using MentorTaskFlow.Infrastructure.Identity;
 using MentorTaskFlow.Infrastructure.Notifications;
+using MentorTaskFlow.Infrastructure.Reviews;
 using MentorTaskFlow.Infrastructure.Schedule;
 using MentorTaskFlow.Infrastructure.Storage;
 using MentorTaskFlow.Infrastructure.Submissions;
@@ -137,6 +138,7 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddScoped<IFileStorage, S3FileStorage>();
         services.AddSingleton<UploadedFileInspector>();
         services.AddScoped<ISubmissionService, SubmissionService>();
+        services.AddScoped<IReviewService, ReviewService>();
     }
 
     /// <summary>Authentication services of TZ 16.</summary>

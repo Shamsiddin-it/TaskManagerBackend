@@ -85,11 +85,9 @@ public sealed class SubmissionConfiguration : IEntityTypeConfiguration<Submissio
         builder.HasIndex(x => x.Sha256Hash)
             .HasDatabaseName("ix_submissions_sha256_hash");
 
-        // Target of the composite FK that Review will carry in the next phase (constraint 14).
-        builder.HasIndex(x => new { x.Id, x.OrganizationId, x.BranchId, x.CategoryId })
-            .IsUnique()
-            .HasDatabaseName("ux_submissions_id_scope");
-
+        // The target of Review's composite FK (constraint 14) is the alternate key EF declares for the
+        // scope tuple. A hand-written unique index on the same four columns stood here until Phase 11
+        // and was removed as an exact duplicate of it.
         builder.HasIndex(x => new { x.OrganizationId, x.BranchId, x.CategoryId, x.SubmittedAt })
             .HasDatabaseName("ix_submissions_scope_submitted_at")
             .IsDescending(false, false, false, true);

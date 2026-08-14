@@ -25,4 +25,5 @@ public static class DomainErrorCodes
     public const string ReassignNotAllowed = "REASSIGN_NOT_ALLOWED";
     public const string SubmissionNotAllowed = "SUBMISSION_NOT_ALLOWED";
     public const string AssigneeInactive = "ASSIGNEE_INACTIVE";
+    public const string SelfReviewForbidden = "SELF_REVIEW_FORBIDDEN";
 }
