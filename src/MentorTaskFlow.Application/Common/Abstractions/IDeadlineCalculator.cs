@@ -36,4 +36,14 @@ public interface IDeadlineCalculator
 
     /// <summary>Computes the deadline of a scheduled assignment (<c>SCH-020</c>).</summary>
     DateTimeOffset CalculateInitialDueAt(DateOnly plannedDate, int dueDays, TimeOnly dueTimeLocal, string timeZoneId);
+
+    /// <summary>
+    /// Projects a UTC instant into a category's zone.
+    /// </summary>
+    /// <remarks>
+    /// Used by auto-generation to answer «what is today here» (<c>SCH-002</c>). The server's own zone
+    /// must never decide that: a job running at 06:00 in Dushanbe is looking for topics planned for
+    /// the Dushanbe date, whatever the container thinks the date is.
+    /// </remarks>
+    DateTimeOffset ToLocal(DateTimeOffset instant, string timeZoneId);
 }

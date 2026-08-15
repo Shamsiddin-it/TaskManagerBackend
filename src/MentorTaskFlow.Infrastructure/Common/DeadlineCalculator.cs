@@ -14,6 +14,9 @@ public sealed class DeadlineCalculator(ILogger<DeadlineCalculator> logger) : IDe
         string timeZoneId) =>
         ToUtc(plannedDate.AddDays(dueDays), dueTimeLocal, timeZoneId);
 
+    public DateTimeOffset ToLocal(DateTimeOffset instant, string timeZoneId) =>
+        TimeZoneInfo.ConvertTime(instant, FindZone(timeZoneId));
+
     public DateTimeOffset ToUtc(DateOnly localDate, TimeOnly localTime, string timeZoneId)
     {
         var zone = FindZone(timeZoneId);

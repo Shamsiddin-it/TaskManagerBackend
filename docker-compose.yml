@@ -107,6 +107,9 @@ services:
       Notifications__SmtpHost: "mailhog"
       Notifications__SmtpPort: "1025"
       Notifications__AppBaseUrl: "http://localhost:5173"
+      # One process locally, so it schedules as well as serves.
+      Scheduler__Enabled: "true"
+      Scheduler__EnableServer: "true"
     ports:
       - "5000:8080"
 

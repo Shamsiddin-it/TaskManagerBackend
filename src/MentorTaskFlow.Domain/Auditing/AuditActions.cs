@@ -69,6 +69,8 @@ public static class AuditActions
 
     // Assignments, notifications, storage, reports, AI
     public const string AssignmentForceCancel = "assignment.force_cancel";
+    public const string SchedulerNoActiveMentor = "scheduler.no_active_mentor";
+    public const string RetentionCleanup = "retention.cleanup";
     public const string NotificationRetry = "notification.retry";
     public const string TelegramBind = "telegram.bind";
     public const string TelegramUnbind = "telegram.unbind";

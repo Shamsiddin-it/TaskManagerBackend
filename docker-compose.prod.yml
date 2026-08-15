@@ -122,6 +122,10 @@ services:
       Telegram__Enabled: ${TELEGRAM_ENABLED}
       Telegram__BotUsername: ${TELEGRAM_BOT_USERNAME}
       Telegram__BotToken: ${TELEGRAM_BOT_TOKEN}
+      # One Hangfire server for the whole installation (TEN-054); the API registers no jobs and runs
+      # none, so scaling it never duplicates a run (DEPLOY-013).
+      Scheduler__Enabled: "true"
+      Scheduler__EnableServer: "true"
     restart: unless-stopped
 
 volumes:

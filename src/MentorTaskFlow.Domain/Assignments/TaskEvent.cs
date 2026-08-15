@@ -106,6 +106,47 @@ public sealed class TaskEvent : BaseEntity
     /// different from its assignment cannot be constructed — the composite FK would refuse it anyway,
     /// and this makes the attempt impossible one layer earlier (<c>EVT-007</c>).
     /// </remarks>
+    /// <summary>
+    /// Records a system event for an assignment the caller changed with raw SQL.
+    /// </summary>
+    /// <remarks>
+    /// The overdue pass moves rows with a conditional <c>UPDATE</c> so the transition stays idempotent
+    /// under concurrency (<c>SCH-007</c>), which means no tracked <see cref="Assignment"/> exists to
+    /// take the scope and the sequence from. Both are therefore passed in — from the same statement
+    /// that allocated them, so the numbering stays the counter's, never a second guess at it
+    /// (<c>EVT-006</c>).
+    /// </remarks>
+    public static TaskEvent RecordSystem(
+        Guid assignmentId,
+        Guid organizationId,
+        Guid branchId,
+        Guid categoryId,
+        int sequenceNumber,
+        TaskEventType eventType,
+        AssignmentStatus? previousStatus,
+        AssignmentStatus? newStatus,
+        Guid correlationId,
+        DateTimeOffset now,
+        JsonDocument? metadata = null) => new()
+    {
+        AssignmentId = assignmentId,
+        OrganizationId = organizationId,
+        BranchId = branchId,
+        CategoryId = categoryId,
+        SequenceNumber = sequenceNumber,
+        EventType = eventType,
+
+        // System events carry no actor, and the two that qualify are refused one above (10.9).
+        ActorId = null,
+        PreviousStatus = previousStatus,
+        NewStatus = newStatus,
+        OccurredAt = now,
+        CorrelationId = correlationId,
+        Metadata = metadata,
+        MetadataSchemaVersion = 1,
+        CreatedAt = now,
+    };
+
     public static TaskEvent Record(
         Assignment assignment,
         TaskEventType eventType,
