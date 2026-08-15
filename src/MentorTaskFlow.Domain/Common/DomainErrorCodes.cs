@@ -26,4 +26,6 @@ public static class DomainErrorCodes
     public const string SubmissionNotAllowed = "SUBMISSION_NOT_ALLOWED";
     public const string AssigneeInactive = "ASSIGNEE_INACTIVE";
     public const string SelfReviewForbidden = "SELF_REVIEW_FORBIDDEN";
+    public const string TelegramAlreadyBound = "TELEGRAM_ALREADY_BOUND";
+    public const string TelegramBindTokenInvalid = "TELEGRAM_BIND_TOKEN_INVALID";
 }

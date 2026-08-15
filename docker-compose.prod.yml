@@ -79,6 +79,12 @@ services:
       Storage__SecretKey: ${STORAGE_SECRET_KEY}
       Storage__Bucket: ${STORAGE_BUCKET}
       Storage__UseSsl: "true"
+      # Staging and Production use the webhook exclusively (TG-002); the secret is the only thing
+      # separating Telegram from anyone who has guessed the URL.
+      Telegram__Enabled: ${TELEGRAM_ENABLED}
+      Telegram__BotUsername: ${TELEGRAM_BOT_USERNAME}
+      Telegram__BotToken: ${TELEGRAM_BOT_TOKEN}
+      Telegram__WebhookSecret: ${TELEGRAM_WEBHOOK_SECRET}
     ports:
       - "8080:8080"
     healthcheck:
@@ -111,6 +117,11 @@ services:
       Notifications__SmtpUseSsl: "true"
       Notifications__FromAddress: ${SMTP_FROM_ADDRESS}
       Notifications__AppBaseUrl: ${CORS_ALLOWED_ORIGIN}
+      # The bot token is a credential, so it comes from the environment like every other secret
+      # (SEC-010). The worker sends; the webhook is served by the API.
+      Telegram__Enabled: ${TELEGRAM_ENABLED}
+      Telegram__BotUsername: ${TELEGRAM_BOT_USERNAME}
+      Telegram__BotToken: ${TELEGRAM_BOT_TOKEN}
     restart: unless-stopped
 
 volumes:

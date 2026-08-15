@@ -52,6 +52,8 @@ public class MentorTaskFlowDbContext(
 
     public DbSet<UserSecurityToken> UserSecurityTokens => Set<UserSecurityToken>();
 
+    public DbSet<TelegramBindToken> TelegramBindTokens => Set<TelegramBindToken>();
+
     public DbSet<Topic> Topics => Set<Topic>();
 
     public DbSet<TopicAssignment> TopicAssignments => Set<TopicAssignment>();

@@ -47,6 +47,17 @@ public sealed class MentorTaskFlowApiFactory : WebApplicationFactory<Program>
     /// </remarks>
     public string? StorageEndpointOverride { get; init; }
 
+    /// <summary>
+    /// Turns the Telegram feature on for a test.
+    /// </summary>
+    /// <remarks>
+    /// Off by default, matching a deployment without a bot: with the flag down the bind endpoints
+    /// answer 404, which several tests assert directly (4.1).
+    /// </remarks>
+    public bool TelegramEnabled { get; init; }
+
+    public const string TelegramWebhookSecret = "integration-webhook-secret-0123456789";
+
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         builder.UseEnvironment("Development");
@@ -67,6 +78,11 @@ public sealed class MentorTaskFlowApiFactory : WebApplicationFactory<Program>
                 ["Storage:AccessKey"] = Persistence.MinioFixture.AccessKey,
                 ["Storage:SecretKey"] = Persistence.MinioFixture.SecretKey,
                 ["Storage:Bucket"] = Persistence.MinioFixture.Bucket,
+
+                ["Telegram:Enabled"] = TelegramEnabled ? "true" : "false",
+                ["Telegram:BotUsername"] = "mentortaskflow_test_bot",
+                ["Telegram:BotToken"] = "test-bot-token",
+                ["Telegram:WebhookSecret"] = TelegramWebhookSecret,
             });
         });
     }
