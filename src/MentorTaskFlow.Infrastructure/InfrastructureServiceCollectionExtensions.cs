@@ -5,6 +5,7 @@ using Amazon.S3;
 using MentorTaskFlow.Application.Common.Abstractions;
 using MentorTaskFlow.Application.Common.Security;
 using MentorTaskFlow.Application.Common.Tenancy;
+using MentorTaskFlow.Infrastructure.Analytics;
 using MentorTaskFlow.Infrastructure.Assignments;
 using MentorTaskFlow.Infrastructure.Auditing;
 using MentorTaskFlow.Infrastructure.Categories;
@@ -103,6 +104,10 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddScoped<IScheduleService, ScheduleService>();
         services.AddScoped<IAssignmentService, AssignmentService>();
         services.AddSingleton<IDeadlineCalculator, DeadlineCalculator>();
+
+        services.AddSingleton<AnalyticsMetrics>();
+        services.AddScoped<MetricsQuery>();
+        services.AddScoped<IAnalyticsService, AnalyticsService>();
 
         AddIdentity(services, configuration);
         AddStorage(services, configuration);
