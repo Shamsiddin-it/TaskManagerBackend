@@ -9,6 +9,8 @@ using MentorTaskFlow.Api.Extensions;
 using MentorTaskFlow.Api.HealthChecks;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using MentorTaskFlow.Api.Middleware;
+using MentorTaskFlow.Infrastructure.Observability;
+using Prometheus;
 using MentorTaskFlow.Api.Options;
 using MentorTaskFlow.Api.Tenancy;
 using MentorTaskFlow.Application.Common.Abstractions;
@@ -42,6 +44,10 @@ builder.Host.UseSerilog((context, services, configuration) => configuration
 // ---------------------------------------------------------------------------
 builder.Services.AddOptions<CorsOptions>()
     .Bind(builder.Configuration.GetSection(CorsOptions.SectionName))
+    .ValidateOnStart();
+
+builder.Services.AddOptions<MetricsOptions>()
+    .Bind(builder.Configuration.GetSection(MetricsOptions.SectionName))
     .ValidateOnStart();
 
 // Read lazily inside the policy builder below. ConfigurationManager is live, so a read at that point
@@ -280,6 +286,10 @@ if (isDevelopment)
     app.UseSwaggerUI(options => options.SwaggerEndpoint("/swagger/v1/swagger.json", "MentorTaskFlow API v1"));
 }
 
+// After UseAuthorization, so the endpoint — and therefore the route template — is already resolved.
+// The template is what the metric labels on; the path would carry identifiers (OBS-010).
+app.UseMiddleware<HttpMetricsMiddleware>();
+
 app.MapControllers();
 
 // Liveness never touches a dependency: a failing database must not restart the process (OBS-003).
@@ -294,6 +304,53 @@ app.MapHealthChecks("/health/ready", new()
     Predicate = check => check.Tags.Contains("ready"),
     ResponseWriter = HealthCheckResponseWriter.WriteAsync,
 });
+
+// ---------------------------------------------------------------------------
+// Prometheus (OBS-007). The endpoint is unauthenticated — a collector holds no
+// token — so the boundary is the network: MetricsOptions permits the loopback
+// and the private ranges by default and nothing routable from outside.
+//
+// The adapter republishes the System.Diagnostics.Metrics instruments the code
+// already emits, so there is one set of metric definitions rather than two that
+// drift apart.
+// ---------------------------------------------------------------------------
+var metricsOptions = app.Services.GetRequiredService<IOptions<MetricsOptions>>().Value;
+
+if (metricsOptions.Enabled)
+{
+    // Constructed eagerly so the gauges of TEN-096 exist before the first scrape: an instrument that
+    // appears only after its first observation leaves a gap in a graph that reads as an outage.
+    _ = app.Services.GetRequiredService<TenantGauges>();
+
+    Prometheus.Metrics.ConfigureMeterAdapter(adapter => adapter.InstrumentFilterPredicate =
+        instrument => instrument.Meter.Name.StartsWith("MentorTaskFlow.", StringComparison.Ordinal));
+
+    Prometheus.Metrics.SuppressDefaultMetrics(new Prometheus.SuppressDefaultMetricOptions
+    {
+        SuppressEventCounters = true,
+        SuppressMeters = false,
+        SuppressDebugMetrics = true,
+        SuppressProcessMetrics = false,
+    });
+
+    // The guard runs before the exporter, not after it: registered the other way round the
+    // exporter would answer the request and the check would never execute.
+    app.Use(async (context, next) =>
+    {
+        if (context.Request.Path.StartsWithSegments("/metrics")
+            && !metricsOptions.Permits(context.Connection.RemoteIpAddress))
+        {
+            // 404 rather than 403: an endpoint an outside caller may not reach should not announce
+            // that it is there (the reasoning of TEN-006, applied to infrastructure).
+            context.Response.StatusCode = StatusCodes.Status404NotFound;
+            return;
+        }
+
+        await next();
+    });
+
+    app.UseMetricServer("/metrics");
+}
 
 app.Run();
 

@@ -85,7 +85,19 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddScoped<IBranchScopeValidator, BranchScopeValidator>();
 
         services.AddMetrics();
+        services.AddMemoryCache();
+
+        // OBS-011: labels carry Organization.Slug and Branch.Code, so the resolver is needed before
+        // any counter that names a tenant.
+        services.AddSingleton<TenantLabelResolver>();
         services.AddSingleton<TenancyMetrics>();
+        services.AddSingleton<HttpMetrics>();
+
+        // TEN-096: composition gauges. The snapshot is refreshed in the background and read at scrape
+        // time, so a slow database delays a graph rather than timing out the collector.
+        services.AddSingleton<TenantGaugeSnapshot>();
+        services.AddSingleton<TenantGauges>();
+        services.AddHostedService<TenantGaugeRefresher>();
 
         // The DbContext is the unit of work; the interface exists so controllers can commit without
         // referencing it directly (SEC-031).

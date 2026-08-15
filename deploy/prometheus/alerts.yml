@@ -1,0 +1,145 @@
+# Alert rules of TZ 30.3 and OBS-012.
+#
+# Checked into the repository rather than configured in the collector's UI: an alert is part of the
+# contract the metrics of 30.2 and 30.4 exist to satisfy, and a rule that lives only in a running
+# Prometheus is lost with the volume it runs on.
+#
+# Every expression below names a series the application actually exports — the presence of each is
+# asserted by MetricsEndpointTests, so a renamed metric fails CI rather than silently muting an alert.
+
+groups:
+  - name: mentortaskflow-availability
+    rules:
+      - alert: HighServerErrorRate
+        expr: |
+          sum(rate(http_requests_total{status=~"5.."}[5m]))
+            / clamp_min(sum(rate(http_requests_total[5m])), 0.001) > 0.02
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "More than 2% of responses are 5xx"
+          description: "TZ 30.3. clamp_min keeps the ratio defined while there is no traffic."
+
+      # REL-008: PostgreSQL or MinIO unreachable. Two consecutive failures rather than one, so a
+      # single scrape lost to a network blip does not page anybody.
+      - alert: ServiceUnhealthy
+        expr: up{job="mentortaskflow"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "The instance fails its readiness probe"
+
+      # OBS-005: Degraded is a 200 and stays in rotation, so it is not urgent — but fifteen minutes of
+      # it means a provider outage nobody has looked at.
+      - alert: DependencyDegraded
+        expr: mentortaskflow_health_degraded == 1
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "A degraded-capable dependency has been unavailable for 15 minutes"
+          description: "SMTP, Telegram or the AI provider. TZ 30.3."
+
+  - name: mentortaskflow-notifications
+    rules:
+      - alert: DeadLetterGrowing
+        expr: increase(notification_outbox_deadletter_total[1h]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "Notifications are dead-lettering"
+          description: >-
+            NTF-023. The alert channel must not be the application's own SMTP (OBS-009), or an
+            unreachable mail provider silences the alert about itself.
+
+      - alert: OutboxNotDraining
+        expr: notification_outbox_pending_count > 500
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "The outbox queue is above 500 and not draining"
+
+  - name: mentortaskflow-jobs
+    rules:
+      - alert: BackgroundJobFailing
+        expr: increase(hangfire_jobs_failed_total[1h]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "A background job has failed"
+
+      # PERF-005: auto-generation ≤ 5 min, overdue ≤ 2 min, one outbox batch ≤ 30 s.
+      - alert: BackgroundJobTooSlow
+        expr: |
+          histogram_quantile(0.95, sum by (job, le) (rate(hangfire_job_duration_seconds_bucket[30m]))) > 300
+        for: 30m
+        labels:
+          severity: info
+        annotations:
+          summary: "A background job is exceeding the duration limit of PERF-005"
+
+      # OBS-012: a branch whose scheduler has not run for a day. scheduler_skipped_total is what tells
+      # a deliberate deactivation from a defect — without it this alert would fire every night for
+      # every branch that is legitimately closed.
+      - alert: SchedulerSilentForBranch
+        expr: |
+          increase(scheduler_runs_total[24h]) == 0
+            unless on (branch) increase(scheduler_skipped_total{reason="branch_inactive"}[24h]) > 0
+        labels:
+          severity: info
+        annotations:
+          summary: "A branch produced no scheduler run in 24 hours and is not deactivated"
+
+  - name: mentortaskflow-tenancy
+    rules:
+      # Critical on any increase, deliberately. In a correct system this counter stays at zero, so a
+      # non-zero rate is either a defect or an attempt to cross the isolation boundary (OBS-012).
+      - alert: CrossScopeReferenceRejected
+        expr: increase(cross_scope_reference_rejected_total[1h]) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: "An attempt to link objects across organizations or branches was rejected"
+          description: "TEN-026. Expected value is zero; investigate the source label."
+
+      - alert: ScopeDenialSpike
+        expr: |
+          increase(branch_scope_denied_total[15m]) + increase(organization_scope_denied_total[15m]) > 50
+        labels:
+          severity: warning
+        annotations:
+          summary: "More than 50 scope denials in 15 minutes"
+          description: "OBS-012. Either a client defect or probing."
+
+      - alert: BranchWithoutAdmin
+        expr: |
+          (active_branches_total > 0)
+            unless on (organization, branch)
+              (users_total{role="Admin", admin_scope="Branch"} > 0)
+        for: 24h
+        labels:
+          severity: info
+        annotations:
+          summary: "An active branch has had no active Branch Admin for 24 hours"
+
+  - name: mentortaskflow-security-and-cost
+    rules:
+      - alert: RefreshReuseSpike
+        expr: increase(auth_refresh_reuse_detected_total[1h]) > 5
+        labels:
+          severity: warning
+        annotations:
+          summary: "More than five refresh-token reuses detected in an hour"
+          description: "AUTH-025. A reuse revokes the whole family; a spike suggests stolen tokens."
+
+      # AI-021. The threshold is a placeholder until открытый вопрос 5 settles the budget; the metric
+      # and the rule exist so that answering it is a one-line change rather than a project.
+      - alert: AiBudgetExceeded
+        expr: increase(ai_tokens_total[30d]) > 50000000
+        labels:
+          severity: info
+        annotations:
+          summary: "Monthly AI token budget exceeded"

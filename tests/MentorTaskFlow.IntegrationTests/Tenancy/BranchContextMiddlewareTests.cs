@@ -45,6 +45,12 @@ public sealed class BranchContextMiddlewareTests : IAsyncLifetime
                 {
                     services.AddLogging();
                     services.AddMetrics();
+                    services.AddMemoryCache();
+
+                    // The resolver turns tenant ids into the Slug/Code labels OBS-011 permits. This
+                    // host has no database, so every lookup falls back to "unknown" — which is the
+                    // documented behaviour and exactly what the middleware under test needs.
+                    services.AddSingleton<TenantLabelResolver>();
                     services.AddSingleton<TenancyMetrics>();
                     services.AddOptions<TenancyOptions>();
                     services.AddHttpContextAccessor();

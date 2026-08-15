@@ -91,6 +91,9 @@ services:
       Ai__ApiKey: ${AI_API_KEY}
       Ai__ModelId: ${AI_MODEL_ID}
       Ai__PromptVersion: ${AI_PROMPT_VERSION}
+      # OBS-007: /metrics is unauthenticated, so the boundary is the network. Empty means the
+      # loopback and the private ranges; set it when the collector lives outside them.
+      Metrics__Enabled: "true"
     ports:
       - "8080:8080"
     healthcheck:
