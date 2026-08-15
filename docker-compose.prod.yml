@@ -85,6 +85,12 @@ services:
       Telegram__BotUsername: ${TELEGRAM_BOT_USERNAME}
       Telegram__BotToken: ${TELEGRAM_BOT_TOKEN}
       Telegram__WebhookSecret: ${TELEGRAM_WEBHOOK_SECRET}
+      # The API key is a credential like every other (SEC-010). With AI__ENABLED unset the summary
+      # endpoint answers 404 and every metric of section 21 keeps working (AI-018).
+      Ai__Enabled: ${AI_ENABLED}
+      Ai__ApiKey: ${AI_API_KEY}
+      Ai__ModelId: ${AI_MODEL_ID}
+      Ai__PromptVersion: ${AI_PROMPT_VERSION}
     ports:
       - "8080:8080"
     healthcheck:

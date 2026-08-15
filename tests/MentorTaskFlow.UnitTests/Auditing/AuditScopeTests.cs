@@ -173,9 +173,12 @@ public sealed class AuditScopeTests
         // The 13 of TEN-048, verbatim.
         AuditActions.AlwaysOrganizationLevelActions.Count.ShouldBe(13);
 
-        // Those 13 plus audit.read — the documented deviation, see AuditActions.OrganizationLevelActions.
-        AuditActions.OrganizationLevelActions.Count.ShouldBe(14);
+        // Those 13 plus audit.read and ai.summary_generate — the two documented deviations, each for
+        // a rule elsewhere in the TZ that defines a branchless action TEN-048 does not list. See
+        // AuditActions.OrganizationLevelActions.
+        AuditActions.OrganizationLevelActions.Count.ShouldBe(15);
         AuditActions.OrganizationLevelActions.ShouldContain(AuditActions.AuditRead);
+        AuditActions.OrganizationLevelActions.ShouldContain(AuditActions.AiSummaryGenerate);
 
         NotificationEventTypes.OrganizationLevelEvents.Count.ShouldBe(4);
     }
@@ -191,6 +194,19 @@ public sealed class AuditScopeTests
         Should.NotThrow(() => Record(AuditActions.AuditRead, branchId: null));
 
         AuditActions.AlwaysOrganizationLevelActions.ShouldNotContain(AuditActions.AuditRead);
+    }
+
+    /// <summary>
+    /// <c>ai.summary_generate</c> follows the same rule: branchless for the organization aggregate of
+    /// <c>TEN-078</c>, and carrying its branch for every other scope.
+    /// </summary>
+    [Fact]
+    public void An_ai_summary_is_recordable_with_and_without_a_branch()
+    {
+        Should.NotThrow(() => Record(AuditActions.AiSummaryGenerate, BranchId));
+        Should.NotThrow(() => Record(AuditActions.AiSummaryGenerate, branchId: null));
+
+        AuditActions.AlwaysOrganizationLevelActions.ShouldNotContain(AuditActions.AiSummaryGenerate);
     }
 
     private static AuditLog Record(string action, Guid? branchId) =>

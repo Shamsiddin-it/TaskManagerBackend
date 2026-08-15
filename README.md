@@ -86,6 +86,8 @@ ConnectionStrings__DefaultConnection
 Database__MigrateOnStartup          # true только в Development (DEPLOY-016)
 Cors__AllowedOrigins__0             # точный origin SPA; wildcard запрещён (SEC-006)
 AUTH__JWT_SIGNING_KEY               # ≥256 бит, только из secret manager (SEC-010)
+Ai__Enabled                         # false — метрики работают, блок резюме отсутствует (AI-018)
+Ai__ApiKey                          # секрет; обязателен при Ai__Enabled=true
 ```
 
 Приложение выполняет валидацию конфигурации при старте: отсутствие или некорректность обязательного значения приводит к отказу старта, а не к работе с небезопасным умолчанием (`DEPLOY-015`).

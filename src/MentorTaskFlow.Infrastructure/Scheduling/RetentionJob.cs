@@ -37,6 +37,15 @@ public sealed class RetentionJob(
     /// <summary>Delivered notifications: 90 days. Dead letters are kept — they are unresolved.</summary>
     private static readonly TimeSpan SentNotificationRetention = TimeSpan.FromDays(90);
 
+    /// <summary>
+    /// AI summaries: 180 days (27.5, <c>AI-012</c>).
+    /// </summary>
+    /// <remarks>
+    /// Deletable, unlike everything else this job leaves alone, because a summary is a cache and not
+    /// evidence: the metrics it describes are still there, and asking for it again regenerates it.
+    /// </remarks>
+    private static readonly TimeSpan AiSummaryRetention = TimeSpan.FromDays(180);
+
     [DisableConcurrentExecution(timeoutInSeconds: 1800)]
     public async Task RunAsync(CancellationToken cancellationToken)
     {
@@ -62,7 +71,12 @@ public sealed class RetentionJob(
             .Where(n => n.Status == NotificationStatus.Sent && n.SentAt < notificationCutoff)
             .ExecuteDeleteAsync(cancellationToken);
 
-        var removed = securityTokens + bindTokens + refreshTokens + notifications;
+        var aiSummaries = await dbContext.AiSummaries
+            .IgnoreQueryFilters()
+            .Where(s => s.CreatedAt < now - AiSummaryRetention)
+            .ExecuteDeleteAsync(cancellationToken);
+
+        var removed = securityTokens + bindTokens + refreshTokens + notifications + aiSummaries;
 
         if (removed == 0)
         {
@@ -71,7 +85,7 @@ public sealed class RetentionJob(
 
         logger.LogInformation("Retention removed {Count} expired row(s).", removed);
 
-        await RecordAsync(securityTokens, bindTokens, refreshTokens, notifications, cancellationToken);
+        await RecordAsync(securityTokens, bindTokens, refreshTokens, notifications, aiSummaries, cancellationToken);
     }
 
     /// <summary>
@@ -87,6 +101,7 @@ public sealed class RetentionJob(
         int bindTokens,
         int refreshTokens,
         int notifications,
+        int aiSummaries,
         CancellationToken cancellationToken)
     {
         var organizations = await dbContext.Organizations
@@ -108,6 +123,7 @@ public sealed class RetentionJob(
                         bindTokens,
                         refreshTokens,
                         notifications,
+                        aiSummaries,
                     }),
                 },
                 organizationId,

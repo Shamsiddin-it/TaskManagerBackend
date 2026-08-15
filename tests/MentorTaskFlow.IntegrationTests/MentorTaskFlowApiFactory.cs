@@ -1,6 +1,10 @@
+using MentorTaskFlow.Application.Common.Abstractions;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace MentorTaskFlow.IntegrationTests;
 
@@ -58,9 +62,38 @@ public sealed class MentorTaskFlowApiFactory : WebApplicationFactory<Program>
 
     public const string TelegramWebhookSecret = "integration-webhook-secret-0123456789";
 
+    /// <summary>
+    /// Turns AI summaries on for a test.
+    /// </summary>
+    /// <remarks>
+    /// Off by default, matching a deployment without an AI subscription: with the flag down
+    /// <c>POST /reports/ai-summary</c> answers 404 while every metric endpoint keeps working, which is
+    /// exactly what <c>TEST-AI-002</c> asserts.
+    /// </remarks>
+    public bool AiEnabled { get; init; }
+
+    /// <summary>
+    /// Replaces the model provider.
+    /// </summary>
+    /// <remarks>
+    /// Every test that exercises the summary flow supplies one. Calling Anthropic from a test suite
+    /// would make the results depend on a third party's availability and would bill the organization
+    /// for a build — and none of the rules under test (cache key, scope, limits) are the model's.
+    /// </remarks>
+    public IAiSummaryProvider? AiProvider { get; init; }
+
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         builder.UseEnvironment("Development");
+
+        if (AiProvider is { } provider)
+        {
+            builder.ConfigureTestServices(services =>
+            {
+                services.RemoveAll<IAiSummaryProvider>();
+                services.AddScoped(_ => provider);
+            });
+        }
 
         builder.ConfigureAppConfiguration((_, configuration) =>
         {
@@ -83,6 +116,10 @@ public sealed class MentorTaskFlowApiFactory : WebApplicationFactory<Program>
                 ["Telegram:BotUsername"] = "mentortaskflow_test_bot",
                 ["Telegram:BotToken"] = "test-bot-token",
                 ["Telegram:WebhookSecret"] = TelegramWebhookSecret,
+
+                ["Ai:Enabled"] = AiEnabled ? "true" : "false",
+                ["Ai:PromptVersion"] = "v1.0",
+                ["Ai:ModelId"] = "claude-sonnet-5",
             });
         });
     }

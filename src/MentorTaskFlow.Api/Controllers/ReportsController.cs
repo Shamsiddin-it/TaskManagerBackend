@@ -1,8 +1,11 @@
 using MentorTaskFlow.Api.Authorization;
 using MentorTaskFlow.Application.Common.Abstractions;
+using MentorTaskFlow.Application.Common.Exceptions;
 using MentorTaskFlow.Contracts.Analytics;
+using MentorTaskFlow.Infrastructure.Options;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Options;
 
 namespace MentorTaskFlow.Api.Controllers;
 
@@ -18,7 +21,10 @@ namespace MentorTaskFlow.Api.Controllers;
 [ApiController]
 [Route("api/v1/reports")]
 [Produces("application/json")]
-public sealed class ReportsController(IAnalyticsService analytics) : ControllerBase
+public sealed class ReportsController(
+    IAnalyticsService analytics,
+    IAiSummaryService aiSummaries,
+    IOptions<AiOptions> aiOptions) : ControllerBase
 {
     /// <summary>
     /// <c>GET /reports/personal</c> — one person's metrics, broken down by category.
@@ -71,4 +77,47 @@ public sealed class ReportsController(IAnalyticsService analytics) : ControllerB
         [FromQuery] ReportQuery query,
         CancellationToken cancellationToken) =>
         Ok(await analytics.GetBranchComparisonAsync(query, cancellationToken));
+
+    /// <summary>
+    /// <c>POST /reports/ai-summary</c> — prose over the figures above (TZ 22).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// 200 when the report already existed and 201 when this call generated it (<c>AI-013</c>). The
+    /// distinction is not cosmetic: a 201 means the organization was billed for tokens, and a client
+    /// that cannot tell the two apart cannot show a regeneration cost either.
+    /// </para>
+    /// <para>
+    /// Synchronous, because the whole request is capped at ninety seconds (<c>AI-003</c>) and a
+    /// background queue for a wait that short would add a polling protocol and gain nothing.
+    /// </para>
+    /// <para>
+    /// With the feature off the endpoint answers 404 rather than 403, exactly as the Telegram bind
+    /// endpoints do: a capability the installation does not have should be indistinguishable from one
+    /// that does not exist. The metric endpoints above are untouched either way (<c>TEST-AI-002</c>).
+    /// </para>
+    /// </remarks>
+    [HttpPost("ai-summary")]
+    [Authorize(Policy = MtfPolicies.Authenticated)]
+    [ProducesResponseType<AiSummaryDto>(StatusCodes.Status200OK)]
+    [ProducesResponseType<AiSummaryDto>(StatusCodes.Status201Created)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status429TooManyRequests)]
+    [ProducesResponseType(StatusCodes.Status503ServiceUnavailable)]
+    public async Task<ActionResult<AiSummaryDto>> GenerateAiSummaryAsync(
+        [FromBody] AiSummaryRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (!aiOptions.Value.Enabled)
+        {
+            throw new NotFoundException();
+        }
+
+        var result = await aiSummaries.GenerateAsync(request, cancellationToken);
+
+        return result.WasCreated
+            ? StatusCode(StatusCodes.Status201Created, result.Summary)
+            : Ok(result.Summary);
+    }
 }

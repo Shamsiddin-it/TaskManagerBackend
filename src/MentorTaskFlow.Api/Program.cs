@@ -7,6 +7,7 @@ using MentorTaskFlow.Api.Authentication;
 using MentorTaskFlow.Api.Authorization;
 using MentorTaskFlow.Api.Extensions;
 using MentorTaskFlow.Api.HealthChecks;
+using Microsoft.Extensions.Diagnostics.HealthChecks;
 using MentorTaskFlow.Api.Middleware;
 using MentorTaskFlow.Api.Options;
 using MentorTaskFlow.Api.Tenancy;
@@ -164,6 +165,14 @@ if (!string.IsNullOrWhiteSpace(connectionString))
 }
 
 healthChecks.AddCheck<StorageHealthCheck>("storage", tags: ["ready"]);
+
+// AI-019: an optional dependency. `failureStatus` is Degraded rather than Unhealthy so a provider
+// outage never takes the instance out of rotation — every metric of section 21 keeps working, and
+// only the summary block is missing.
+healthChecks.AddCheck<AiProviderHealthCheck>(
+    "ai",
+    failureStatus: HealthStatus.Degraded,
+    tags: ["ready"]);
 
 var app = builder.Build();
 

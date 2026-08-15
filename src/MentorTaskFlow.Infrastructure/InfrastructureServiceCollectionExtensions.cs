@@ -2,6 +2,7 @@ using Amazon.Runtime;
 using Hangfire;
 using Hangfire.PostgreSql;
 using Amazon.S3;
+using Anthropic;
 using MentorTaskFlow.Application.Common.Abstractions;
 using MentorTaskFlow.Application.Common.Security;
 using MentorTaskFlow.Application.Common.Tenancy;
@@ -113,8 +114,66 @@ public static class InfrastructureServiceCollectionExtensions
         AddStorage(services, configuration);
         AddTelegram(services, configuration);
         AddScheduler(services, configuration);
+        AddAi(services, configuration);
 
         return services;
+    }
+
+    /// <summary>AI summaries over the analytics of TZ 21 (TZ 22).</summary>
+    /// <remarks>
+    /// <para>
+    /// The provider is chosen here, once, from configuration. Everything downstream depends on
+    /// <c>IAiSummaryProvider</c> and does not know whether a key exists (<c>AI-001</c>) — which is
+    /// what makes «no subscription» a deployment decision rather than a code path threaded through
+    /// the service.
+    /// </para>
+    /// <para>
+    /// The registration is unconditional: with the feature off the endpoint answers 404 before the
+    /// provider is reached, and the readiness probe still reports the optional dependency as degraded
+    /// rather than missing (<c>AI-019</c>).
+    /// </para>
+    /// </remarks>
+    private static void AddAi(IServiceCollection services, IConfiguration configuration)
+    {
+        services.AddOptions<AiOptions>()
+            .Bind(configuration.GetSection(AiOptions.SectionName))
+            .ValidateDataAnnotations()
+            .ValidateOnStart();
+
+        services.AddSingleton<AiMetrics>();
+        services.AddSingleton<AiProviderStatus>();
+        services.AddScoped<IAiSummaryService, AiSummaryService>();
+
+        var options = configuration.GetSection(AiOptions.SectionName).Get<AiOptions>() ?? new AiOptions();
+
+        if (!options.IsConfigured)
+        {
+            // Открытый вопрос 5 — the API key and the budget — is unanswered, so a deployment without
+            // one must still boot and still serve every metric. It gets a provider that refuses,
+            // not a missing registration that would fail at resolution time.
+            services.AddScoped<IAiSummaryProvider, UnconfiguredSummaryProvider>();
+            return;
+        }
+
+        // Built from the provider rather than a captured snapshot, for the reason the DbContext and
+        // the S3 client are: the key arrives from the environment and may be registered after this.
+        services.AddSingleton(serviceProvider =>
+        {
+            var ai = serviceProvider.GetRequiredService<IOptions<AiOptions>>().Value;
+
+            return new AnthropicClient
+            {
+                ApiKey = ai.ApiKey,
+
+                // Retries belong to AnthropicSummaryProvider, which counts them against the
+                // ninety-second budget of AI-003. Left at the SDK default of two they would compound
+                // with ours and quietly quadruple the attempts.
+                MaxRetries = 0,
+                Timeout = TimeSpan.FromSeconds(ai.TimeoutSeconds),
+            };
+        });
+
+        services.AddScoped<IAiSummaryProvider, AnthropicSummaryProvider>();
     }
 
     /// <summary>The outbox, its delivery channels and the worker that drains it (TZ 18).</summary>

@@ -1,4 +1,5 @@
 using System.Reflection;
+using MentorTaskFlow.Domain.Analytics;
 using MentorTaskFlow.Domain.Assignments;
 using MentorTaskFlow.Domain.Auditing;
 using MentorTaskFlow.Domain.Categories;
@@ -69,6 +70,8 @@ public class MentorTaskFlowDbContext(
     public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
 
     public DbSet<NotificationOutbox> NotificationOutbox => Set<NotificationOutbox>();
+
+    public DbSet<AiSummary> AiSummaries => Set<AiSummary>();
 
     // Referenced by the query-filter expressions below. EF Core re-evaluates these on every query,
     // so one compiled model serves every tenant without leaking a captured value between requests.
@@ -188,6 +191,15 @@ public class MentorTaskFlowDbContext(
             || (FilterOrganizationId != null
                 && e.OrganizationId == FilterOrganizationId
                 && (FilterBranchId == null || e.BranchId == FilterBranchId)));
+
+        // The organization aggregate has no branch, so a branch-narrowed context must not hide it
+        // from the Organization Admin who asked for it — hence `e.BranchId == null` alongside the
+        // branch match, the same shape User uses for organization-level administrators.
+        modelBuilder.Entity<AiSummary>().HasQueryFilter(e =>
+            FilterSuppressed
+            || (FilterOrganizationId != null
+                && e.OrganizationId == FilterOrganizationId
+                && (FilterBranchId == null || e.BranchId == FilterBranchId || e.BranchId == null)));
     }
 
     protected override void ConfigureConventions(ModelConfigurationBuilder configurationBuilder)
