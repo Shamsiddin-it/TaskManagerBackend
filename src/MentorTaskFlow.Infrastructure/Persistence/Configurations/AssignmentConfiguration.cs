@@ -56,7 +56,12 @@ public sealed class AssignmentConfiguration : IEntityTypeConfiguration<Assignmen
         builder.Property(x => x.Source).HasConversion<string>().HasMaxLength(8).IsRequired();
         builder.Property(x => x.InitialDueAt).IsRequired();
         builder.Property(x => x.CurrentDueAt).IsRequired();
-        builder.Property(x => x.AutoGenerationKey).HasMaxLength(120);
+        // 160, not the 120 of SCH-008: the template of SCH-009 is four N-format GUIDs, a date and the
+        // source — 147 characters — so the two requirements as written cannot both hold. The template
+        // wins, because SCH-023 asks for it explicitly and for a stated reason (a key an operator can
+        // read during an incident without a database). The column length is the part with no
+        // requirement behind it.
+        builder.Property(x => x.AutoGenerationKey).HasMaxLength(160);
         builder.Property(x => x.CancelReason).HasMaxLength(Assignment.CancelReasonMaxLength);
         builder.Property(x => x.LastEventSequence).IsRequired().HasDefaultValue(0);
 

@@ -1,4 +1,6 @@
 using Amazon.Runtime;
+using Hangfire;
+using Hangfire.PostgreSql;
 using Amazon.S3;
 using MentorTaskFlow.Application.Common.Abstractions;
 using MentorTaskFlow.Application.Common.Security;
@@ -10,6 +12,7 @@ using MentorTaskFlow.Infrastructure.Common;
 using MentorTaskFlow.Infrastructure.Identity;
 using MentorTaskFlow.Infrastructure.Notifications;
 using MentorTaskFlow.Infrastructure.Reviews;
+using MentorTaskFlow.Infrastructure.Scheduling;
 using MentorTaskFlow.Infrastructure.Schedule;
 using MentorTaskFlow.Infrastructure.Storage;
 using MentorTaskFlow.Infrastructure.Submissions;
@@ -104,6 +107,7 @@ public static class InfrastructureServiceCollectionExtensions
         AddIdentity(services, configuration);
         AddStorage(services, configuration);
         AddTelegram(services, configuration);
+        AddScheduler(services, configuration);
 
         return services;
     }
@@ -125,6 +129,66 @@ public static class InfrastructureServiceCollectionExtensions
         // The loop is registered unconditionally and stops itself when the process is not the worker:
         // whether background processing belongs here is configuration, not composition (DEPLOY-013).
         services.AddHostedService<OutboxWorker>();
+    }
+
+    /// <summary>
+    /// Hangfire and the recurring jobs of TZ 20.
+    /// </summary>
+    /// <remarks>
+    /// The Dashboard is not mounted anywhere (<c>TEN-059</c>): it lists job arguments across every
+    /// organization, so exposing it to any application user — Organization Admin included — would
+    /// hand them another tenant's data. Operational visibility comes from <c>/admin/health</c> and the
+    /// notification journal, both bounded by the caller's contour.
+    /// </remarks>
+    private static void AddScheduler(IServiceCollection services, IConfiguration configuration)
+    {
+        services.AddOptions<SchedulerOptions>()
+            .Bind(configuration.GetSection(SchedulerOptions.SectionName))
+            .ValidateDataAnnotations()
+            .ValidateOnStart();
+
+        services.AddSingleton<SchedulerMetrics>();
+        services.AddScoped<MentorSelector>();
+        services.AddScoped<AutoGenerationJob>();
+        services.AddScoped<OverdueJob>();
+        services.AddScoped<DeadlineReminderJob>();
+        services.AddScoped<OrphanObjectCleanupJob>();
+        services.AddScoped<RetentionJob>();
+
+        var options = configuration.GetSection(SchedulerOptions.SectionName).Get<SchedulerOptions>()
+            ?? new SchedulerOptions();
+
+        if (!options.Enabled)
+        {
+            return;
+        }
+
+        var connectionString = configuration.GetConnectionString("DefaultConnection");
+
+        if (string.IsNullOrWhiteSpace(connectionString))
+        {
+            return;
+        }
+
+        services.AddHangfire(configure => configure
+            .SetDataCompatibilityLevel(CompatibilityLevel.Version_180)
+            .UseSimpleAssemblyNameTypeSerializer()
+            .UseRecommendedSerializerSettings()
+            .UsePostgreSqlStorage(
+                postgres => postgres.UseNpgsqlConnection(connectionString),
+                new PostgreSqlStorageOptions
+                {
+                    // ADR-002: outside `public`, so an EF migration never diffs — or drops — it.
+                    SchemaName = options.Schema,
+                    PrepareSchemaIfNecessary = true,
+                }));
+
+        if (options.EnableServer)
+        {
+            services.AddHangfireServer(server => server.WorkerCount = Environment.ProcessorCount);
+        }
+
+        services.AddHostedService<SchedulerRegistrar>();
     }
 
     /// <summary>Telegram binding and the chat delivery channel (TZ 19).</summary>
