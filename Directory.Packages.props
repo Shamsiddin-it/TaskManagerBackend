@@ -34,6 +34,13 @@
     <PackageVersion Include="Swashbuckle.AspNetCore" Version="10.2.3" />
     <PackageVersion Include="Serilog.AspNetCore" Version="10.0.0" />
     <PackageVersion Include="AspNetCore.HealthChecks.NpgSql" Version="9.0.0" />
+    <!--
+      Bridges the System.Diagnostics.Metrics instruments the application already emits into a
+      Prometheus exposition endpoint (OBS-007). Chosen over the OpenTelemetry Prometheus exporter,
+      which is still a release candidate: the metric surface of 30.2 is part of the acceptance
+      contract, and it should not rest on a prerelease package.
+    -->
+    <PackageVersion Include="prometheus-net.AspNetCore" Version="8.2.1" />
   </ItemGroup>
 
   <ItemGroup Label="Scheduler">

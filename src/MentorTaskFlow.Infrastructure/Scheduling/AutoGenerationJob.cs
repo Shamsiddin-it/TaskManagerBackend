@@ -81,9 +81,62 @@ public sealed class AutoGenerationJob(
                     x.Settings.TimeZoneId))
             .ToListAsync(cancellationToken);
 
+        await ReportBrokenChainAsync(timeZoneId, cancellationToken);
+
         foreach (var target in targets)
         {
             await ProcessCategoryAsync(target, localDate, now, cancellationToken);
+        }
+    }
+
+    /// <summary>
+    /// Counts the categories the chain skipped, and why (<c>TEST-TEN-022</c>, <c>OBS-012</c>).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The query above drops an inactive link silently, which is correct behaviour and unhelpful
+    /// operationally: «no suggestions in Khujand today» and «Khujand is deactivated» produce exactly
+    /// the same empty result. The alert of <c>OBS-012</c> — a branch whose scheduler has not run for a
+    /// day — cannot tell a deliberate deactivation from a defect without this counter.
+    /// </para>
+    /// <para>
+    /// Reasons are assigned top down, in the order <c>TEN-050</c> breaks the chain: a category inside a
+    /// deactivated branch is reported as <c>branch_inactive</c>, because that is the link that stopped
+    /// it and the one an operator would act on.
+    /// </para>
+    /// </remarks>
+    private async Task ReportBrokenChainAsync(string timeZoneId, CancellationToken cancellationToken)
+    {
+        var skipped = await dbContext.Categories
+            .IgnoreQueryFilters()
+            .AsNoTracking()
+            .Join(
+                dbContext.CategorySettings.IgnoreQueryFilters().AsNoTracking()
+                    .Where(s => s.TimeZoneId == timeZoneId),
+                c => c.Id,
+                s => s.CategoryId,
+                (c, s) => c)
+            .Join(
+                dbContext.Branches.IgnoreQueryFilters().AsNoTracking(),
+                c => c.BranchId,
+                b => b.Id,
+                (c, b) => new { Category = c, Branch = b })
+            .Join(
+                dbContext.Organizations.IgnoreQueryFilters().AsNoTracking(),
+                x => x.Category.OrganizationId,
+                o => o.Id,
+                (x, o) => new { x.Category, x.Branch, Organization = o })
+            .Where(x => !x.Organization.IsActive || !x.Branch.IsActive || !x.Category.IsActive)
+            .Select(x => !x.Organization.IsActive
+                ? "organization_inactive"
+                : !x.Branch.IsActive
+                    ? "branch_inactive"
+                    : "category_inactive")
+            .ToListAsync(cancellationToken);
+
+        foreach (var reason in skipped)
+        {
+            metrics.Skipped(reason);
         }
     }
 

@@ -61,7 +61,7 @@ public sealed class BranchContextMiddleware(RequestDelegate next, IOptions<Tenan
             // Rejected even when the value equals the caller's own branch. Any presence of the header
             // from these roles is either a client defect or a bypass attempt, and both warrant
             // observation (TEN-032).
-            metrics.RecordBranchScopeDenied();
+            metrics.RecordBranchScopeDenied(user.OrganizationId, user.BranchId);
             await RecordScopeOverrideRejectionAsync(context, user, cancellationToken: context.RequestAborted);
 
             throw new ForbiddenException(
@@ -90,7 +90,7 @@ public sealed class BranchContextMiddleware(RequestDelegate next, IOptions<Tenan
                 user.OrganizationId,
                 effectiveBranchId,
                 canOverrideBranch: isOrganizationAdmin,
-                onMissingBranchForMutation: metrics.RecordBranchContextMissing);
+                onMissingBranchForMutation: () => metrics.RecordBranchContextMissing(user.OrganizationId));
         }
 
         tenantFilter.SetScope(user.OrganizationId, effectiveBranchId);

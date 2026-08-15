@@ -152,6 +152,45 @@ public sealed class SchedulerJobTests(PostgresFixture postgres) : IAsyncLifetime
         (await context.Assignments.CountAsync(a => a.BranchId == affected)).ShouldBe(0);
     }
 
+    /// <summary>
+    /// <c>TEST-TEN-022</c>: a deactivated branch produces nothing, says so in the metric, and does not
+    /// disturb its neighbours.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The counter is the part worth insisting on. A deactivated branch and a branch whose scheduler
+    /// silently failed both produce zero suggestions, and only one of them is an incident — without
+    /// <c>scheduler_skipped_total{reason="branch_inactive"}</c> the alert of <c>OBS-012</c> cannot tell
+    /// them apart and would either cry wolf every night or stay silent through a real outage.
+    /// </para>
+    /// <para>
+    /// The third assertion is the one people forget: deactivating a branch must be a local event. A
+    /// chain that broke for the whole run rather than for one branch would show up here as an empty
+    /// head office.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public async Task A_deactivated_branch_is_skipped_counted_and_leaves_its_neighbours_alone()
+    {
+        // Khujand is seeded with the same topic and template as the head office, so it would
+        // generate today were the branch active.
+        await DeactivateAsync("branch");
+
+        var skipped = new List<string>();
+        await RunGenerationAsync(reason => skipped.Add(reason));
+
+        await using var context = postgres.CreateContext(suppressTenantFilter: true);
+
+        // Nothing in the deactivated branch.
+        (await context.Assignments.CountAsync(a => a.BranchId == _khujandId)).ShouldBe(0);
+
+        // Counted, and by the link that broke.
+        skipped.ShouldContain("branch_inactive");
+
+        // The neighbour ran normally — deactivation is one branch's event, not the run's.
+        (await context.Assignments.CountAsync(a => a.BranchId == _headOfficeId)).ShouldBe(1);
+    }
+
     /// <summary>Optional templates are not generated: only <c>IsRequired</c> ones (<c>SCH-003</c>).</summary>
     [Fact]
     public async Task An_optional_template_is_not_generated()
@@ -450,10 +489,12 @@ public sealed class SchedulerJobTests(PostgresFixture postgres) : IAsyncLifetime
     // Harness
     // -----------------------------------------------------------------
 
-    private async Task RunGenerationAsync()
+    private async Task RunGenerationAsync(Action<string>? onSkipped = null)
     {
         await using var context = postgres.CreateContext(suppressTenantFilter: true);
         var clock = new FixedClock(RunAt);
+
+        using var listener = onSkipped is null ? null : ListenForSkips(onSkipped);
 
         var job = new AutoGenerationJob(
             context,
@@ -461,11 +502,57 @@ public sealed class SchedulerJobTests(PostgresFixture postgres) : IAsyncLifetime
             new DeadlineCalculator(NullLogger<DeadlineCalculator>.Instance),
             Writer(context, clock),
             new NoopAuditWriter(context, clock),
-            Metrics(),
+            listener?.Metrics ?? Metrics(),
             NullLogger<AutoGenerationJob>.Instance,
             clock);
 
         await job.RunAsync(Zone, CancellationToken.None);
+    }
+
+    /// <summary>
+    /// Observes <c>scheduler_skipped_total</c> as the job records it.
+    /// </summary>
+    /// <remarks>
+    /// A <see cref="MeterListener"/> rather than a scrape of <c>/metrics</c>: the job runs here in
+    /// process, without a host, and the assertion is about the reason label — which is what the alert
+    /// of <c>OBS-012</c> keys on.
+    /// </remarks>
+    private static SkipListener ListenForSkips(Action<string> onSkipped)
+    {
+        var factory = MeterFactory();
+        var metrics = new SchedulerMetrics(factory);
+
+        var listener = new MeterListener
+        {
+            InstrumentPublished = (instrument, l) =>
+            {
+                if (instrument.Meter.Name == SchedulerMetrics.MeterName
+                    && instrument.Name == "scheduler_skipped_total")
+                {
+                    l.EnableMeasurementEvents(instrument);
+                }
+            },
+        };
+
+        listener.SetMeasurementEventCallback<long>((_, _, tags, _) =>
+        {
+            foreach (var tag in tags)
+            {
+                if (tag.Key == "reason" && tag.Value is string reason)
+                {
+                    onSkipped(reason);
+                }
+            }
+        });
+
+        listener.Start();
+
+        return new SkipListener(metrics, listener);
+    }
+
+    private sealed record SkipListener(SchedulerMetrics Metrics, MeterListener Listener) : IDisposable
+    {
+        public void Dispose() => Listener.Dispose();
     }
 
     private async Task RunOverdueAsync()

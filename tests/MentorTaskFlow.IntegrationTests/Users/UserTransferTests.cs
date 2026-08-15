@@ -325,6 +325,62 @@ public sealed class UserTransferTests(PostgresFixture fixture) : IAsyncLifetime
         joined.Metadata.ShouldBeNull();
     }
 
+    /// <summary>
+    /// <c>TEST-TEN-026</c>, <c>TEST-TEN-027</c> and <c>TEST-TEN-028</c>: the transfer ends every
+    /// session the moved user held.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Three assertions about one mechanism, and each is load-bearing on its own. <c>TokenVersion</c>
+    /// rises by <b>exactly</b> one — a version that jumped by two would mean the transfer ran twice,
+    /// and one that did not move would leave every issued access token valid for its full lifetime.
+    /// </para>
+    /// <para>
+    /// The refresh tokens are revoked with <c>BranchChanged</c> rather than simply deleted: the reason
+    /// is what tells an incident review why a session ended, and «gone» and «revoked because the
+    /// person moved branch» are different facts.
+    /// </para>
+    /// <para>
+    /// The old access token is then refused with <c>TOKEN_VERSION_MISMATCH</c> within the 30 seconds
+    /// of <c>AUTH-028</c>. Without that the user would keep reading their former branch for as long
+    /// as the token lived — which is precisely what <c>USER-017</c> forbids.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public async Task A_branch_transfer_ends_every_session_of_the_moved_user()
+    {
+        await SeedRefreshTokenAsync(_mentorId);
+
+        // The mentor's own client, signed in before the transfer — this is the session that must die.
+        using var mentor = await SignInAsync("mentor-head@mentortaskflow.test");
+        (await mentor.GetAsync("/api/v1/auth/me")).StatusCode.ShouldBe(HttpStatusCode.OK);
+
+        var versionBefore = await TokenVersionOfAsync(_mentorId);
+
+        using var admin = await SignInAsync("organization-admin@mentortaskflow.test");
+
+        var response = await admin.PostAsJsonAsync($"/api/v1/users/{_mentorId}/change-branch",
+            new ChangeBranchRequest(_khujandId, Reason, await TokenOfAsync(admin, _mentorId), _khujandCategoryId));
+
+        response.StatusCode.ShouldBe(HttpStatusCode.OK);
+
+        // TEST-TEN-026: exactly one.
+        (await TokenVersionOfAsync(_mentorId)).ShouldBe(versionBefore + 1);
+
+        await using var context = fixture.CreateContext(suppressTenantFilter: true);
+
+        // TEST-TEN-027: every refresh token, and the reason says why.
+        var tokens = await context.RefreshTokens.Where(t => t.UserId == _mentorId).ToListAsync();
+        tokens.ShouldNotBeEmpty();
+        tokens.ShouldAllBe(t => t.ReasonRevoked == RefreshTokenRevocationReason.BranchChanged);
+
+        // TEST-TEN-028: the access token the mentor is still holding is refused.
+        var afterTransfer = await mentor.GetAsync("/api/v1/auth/me");
+
+        afterTransfer.StatusCode.ShouldBe(HttpStatusCode.Unauthorized);
+        (await ReadCodeAsync(afterTransfer)).ShouldBe(ErrorCodes.TokenVersionMismatch);
+    }
+
     /// <summary><c>TEST-TEN-025</c>: one assignment in <c>Assigned</c> is enough to stop the transfer.</summary>
     [Fact]
     public async Task Unfinished_work_blocks_a_branch_transfer()
@@ -549,6 +605,13 @@ public sealed class UserTransferTests(PostgresFixture fixture) : IAsyncLifetime
         assignment.Approve(now);
 
         await context.SaveChangesAsync();
+    }
+
+    private async Task<int> TokenVersionOfAsync(Guid userId)
+    {
+        await using var context = fixture.CreateContext(suppressTenantFilter: true);
+
+        return (await context.Users.AsNoTracking().SingleAsync(u => u.Id == userId)).TokenVersion;
     }
 
     private static async Task<string> TokenOfAsync(HttpClient admin, Guid userId) =>
