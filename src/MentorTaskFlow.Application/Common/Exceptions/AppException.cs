@@ -94,6 +94,20 @@ public sealed class UnprocessableEntityException(string code, string? detail = n
 public sealed class TooManyRequestsException(string? detail = null)
     : AppException(ErrorCodes.RateLimitExceeded, detail ?? "Превышен лимит запросов. Повторите попытку позже.");
 
+/// <summary>
+/// 429 <c>AI_REGENERATION_LIMIT</c>: forced regeneration more than once a day for one report subject
+/// (<c>AI-011</c>).
+/// </summary>
+/// <remarks>
+/// A separate code rather than the general rate limit because the remedy is different. Nothing here
+/// is throttled by load — the cached report is available immediately, and the caller is being told
+/// that regenerating it again today is what is unavailable.
+/// </remarks>
+public sealed class AiRegenerationLimitException(string? detail = null)
+    : AppException(
+        ErrorCodes.AiRegenerationLimit,
+        detail ?? "Принудительная регенерация доступна не чаще одного раза в сутки.");
+
 /// <summary>503. A dependency the request cannot proceed without is unreachable (<c>REL-008</c>).</summary>
 public sealed class ServiceUnavailableException(string code, string? detail = null)
     : AppException(code, detail ?? "Сервис временно недоступен.");

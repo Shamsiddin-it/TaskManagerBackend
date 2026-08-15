@@ -59,6 +59,15 @@
     <PackageVersion Include="Microsoft.Extensions.Http" Version="10.0.10" />
   </ItemGroup>
 
+  <ItemGroup Label="AI">
+    <!--
+      The official Anthropic SDK rather than hand-rolled HTTP: AI-003 needs the provider's own
+      distinction between a retryable 429/5xx and a permanent error, and the SDK surfaces that as
+      typed exceptions instead of leaving it to status-code guesswork.
+    -->
+    <PackageVersion Include="Anthropic" Version="12.40.0" />
+  </ItemGroup>
+
   <ItemGroup Label="Storage">
     <!--
       The AWS SDK rather than the MinIO client: the TZ specifies "S3-compatible storage (MinIO)", and

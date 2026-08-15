@@ -130,7 +130,18 @@ public static class AuditActions
     /// read carries their branch, so they can still see their own reads. Only the all-branches read
     /// has no branch to record.
     /// </para>
+    /// <para>
+    /// <see cref="AiSummaryGenerate"/> is added for the same reason and on the same terms.
+    /// <c>TEN-078</c> defines an organization-level summary explicitly — <c>Scope='Organization'</c>,
+    /// <c>branch_id IS NULL</c> in <c>ck_ai_summaries_scope_shape</c> — and <c>AI-021</c> requires
+    /// every generation to be recorded. Without the entry those two rules contradict each other and
+    /// the recording fails at the database. A branch-scoped summary still carries its branch.
+    /// </para>
     /// </remarks>
     public static readonly IReadOnlySet<string> OrganizationLevelActions =
-        new HashSet<string>(AlwaysOrganizationLevelActions, StringComparer.Ordinal) { AuditRead };
+        new HashSet<string>(AlwaysOrganizationLevelActions, StringComparer.Ordinal)
+        {
+            AuditRead,
+            AiSummaryGenerate,
+        };
 }
