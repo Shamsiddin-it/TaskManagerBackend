@@ -83,6 +83,17 @@ public sealed class UnsupportedMediaTypeException(string code, string? detail = 
 public sealed class UnprocessableEntityException(string code, string? detail = null)
     : AppException(code, detail ?? "Содержимое файла не прошло проверку.");
 
+/// <summary>
+/// 429 <c>RATE_LIMIT_EXCEEDED</c> (<c>SEC-007</c>).
+/// </summary>
+/// <remarks>
+/// Raised both by the transport-level limiter and by per-actor limits inside services — issuing
+/// Telegram bind tokens, for one (<c>TG-014</c>) — which the middleware cannot see because the budget
+/// belongs to the user rather than to the connection.
+/// </remarks>
+public sealed class TooManyRequestsException(string? detail = null)
+    : AppException(ErrorCodes.RateLimitExceeded, detail ?? "Превышен лимит запросов. Повторите попытку позже.");
+
 /// <summary>503. A dependency the request cannot proceed without is unreachable (<c>REL-008</c>).</summary>
 public sealed class ServiceUnavailableException(string code, string? detail = null)
     : AppException(code, detail ?? "Сервис временно недоступен.");

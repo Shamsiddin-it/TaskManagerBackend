@@ -13,6 +13,7 @@ using MentorTaskFlow.Infrastructure.Reviews;
 using MentorTaskFlow.Infrastructure.Schedule;
 using MentorTaskFlow.Infrastructure.Storage;
 using MentorTaskFlow.Infrastructure.Submissions;
+using MentorTaskFlow.Infrastructure.Telegram;
 using MentorTaskFlow.Infrastructure.Tenancy;
 using MentorTaskFlow.Infrastructure.Users;
 using MentorTaskFlow.Infrastructure.Observability;
@@ -102,6 +103,7 @@ public static class InfrastructureServiceCollectionExtensions
 
         AddIdentity(services, configuration);
         AddStorage(services, configuration);
+        AddTelegram(services, configuration);
 
         return services;
     }
@@ -123,6 +125,30 @@ public static class InfrastructureServiceCollectionExtensions
         // The loop is registered unconditionally and stops itself when the process is not the worker:
         // whether background processing belongs here is configuration, not composition (DEPLOY-013).
         services.AddHostedService<OutboxWorker>();
+    }
+
+    /// <summary>Telegram binding and the chat delivery channel (TZ 19).</summary>
+    private static void AddTelegram(IServiceCollection services, IConfiguration configuration)
+    {
+        services.AddOptions<TelegramOptions>()
+            .Bind(configuration.GetSection(TelegramOptions.SectionName))
+            .ValidateDataAnnotations()
+            .ValidateOnStart();
+
+        services.AddScoped<ITelegramService, TelegramService>();
+
+        // Registered alongside the SMTP sender: the dispatcher picks by channel, so a Telegram row
+        // stops being rescheduled the moment this exists.
+        services.AddScoped<INotificationSender, TelegramNotificationSender>();
+
+        services.AddHttpClient(TelegramNotificationSender.HttpClientName, client =>
+        {
+            client.BaseAddress = new Uri("https://api.telegram.org");
+
+            // Bounded so a hung provider cannot hold a worker slot: the row is retried on the next
+            // pass instead.
+            client.Timeout = TimeSpan.FromSeconds(15);
+        });
     }
 
     /// <summary>Object storage and the file limits of TZ 17.</summary>

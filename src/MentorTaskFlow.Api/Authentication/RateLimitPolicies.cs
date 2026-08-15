@@ -27,12 +27,23 @@ public static class RateLimitPolicies
     /// <summary>Everything else that is authenticated — 300 per minute per user.</summary>
     public const string Default = "authenticated-default";
 
+    /// <summary>
+    /// <c>POST /telegram/webhook</c> — 60 per minute per IP (<c>TG-003</c>).
+    /// </summary>
+    /// <remarks>
+    /// Anonymous by necessity: Telegram cannot present a credential. The shared secret authenticates
+    /// the caller, and this limit bounds what an unauthenticated prober can cost us before the secret
+    /// check rejects them.
+    /// </remarks>
+    public const string TelegramWebhook = "telegram-webhook";
+
     public static IServiceCollection AddMentorTaskFlowRateLimiting(this IServiceCollection services) =>
         services.AddRateLimiter(limiter =>
         {
             limiter.AddPolicy(Login, context => FixedWindowByIp(context, permitLimit: 10, TimeSpan.FromMinutes(1)));
             limiter.AddPolicy(ForgotPassword, context => FixedWindowByIp(context, permitLimit: 5, TimeSpan.FromHours(1)));
             limiter.AddPolicy(PasswordToken, context => FixedWindowByIp(context, permitLimit: 10, TimeSpan.FromHours(1)));
+            limiter.AddPolicy(TelegramWebhook, context => FixedWindowByIp(context, permitLimit: 60, TimeSpan.FromMinutes(1)));
             limiter.AddPolicy(Default, FixedWindowByUser);
 
             limiter.OnRejected = (context, _) =>
@@ -85,6 +96,5 @@ public static class RateLimitPolicies
     }
 }
 
-/// <summary>429 <c>RATE_LIMIT_EXCEEDED</c> (<c>SEC-007</c>).</summary>
-public sealed class TooManyRequestsException()
-    : AppException(ErrorCodes.RateLimitExceeded, "Превышен лимит запросов. Повторите попытку позже.");
+// TooManyRequestsException moved to MentorTaskFlow.Application in Phase 13: services enforce
+// per-actor limits the transport-level limiter cannot see (TG-014).
