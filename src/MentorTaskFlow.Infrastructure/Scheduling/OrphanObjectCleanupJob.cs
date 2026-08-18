@@ -1,6 +1,4 @@
 using System.Text.Json;
-using Amazon.S3;
-using Amazon.S3.Model;
 using Hangfire;
 using MentorTaskFlow.Application.Common.Abstractions;
 using MentorTaskFlow.Domain.Auditing;
@@ -12,6 +10,8 @@ using MentorTaskFlow.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using Minio;
+using Minio.DataModel.Args;
 
 namespace MentorTaskFlow.Infrastructure.Scheduling;
 
@@ -25,7 +25,7 @@ namespace MentorTaskFlow.Infrastructure.Scheduling;
 /// </remarks>
 public sealed class OrphanObjectCleanupJob(
     MentorTaskFlowDbContext dbContext,
-    IAmazonS3 client,
+    IMinioClient client,
     IOutboxWriter outboxWriter,
     IAuditWriter auditWriter,
     IOptions<StorageOptions> options,
@@ -60,33 +60,35 @@ public sealed class OrphanObjectCleanupJob(
         CancellationToken cancellationToken)
     {
         var prefix = $"submissions/{organizationId}/{branchId}/";
-        var request = new ListObjectsV2Request { BucketName = _options.Bucket, Prefix = prefix };
-
-        ListObjectsV2Response page;
         var deleted = 0;
 
-        do
+        // The client paginates internally and yields one object at a time, so there is no
+        // continuation token to carry and no page to hold in memory — a branch with a term's worth of
+        // submissions is swept in constant space.
+        var listing = client.ListObjectsEnumAsync(
+            new ListObjectsArgs()
+                .WithBucket(_options.Bucket)
+                .WithPrefix(prefix)
+                .WithRecursive(true),
+            cancellationToken);
+
+        await foreach (var item in listing.ConfigureAwait(false))
         {
-            page = await client.ListObjectsV2Async(request, cancellationToken);
-
-            foreach (var item in page.S3Objects ?? [])
+            // Younger than the grace period: an upload may still be committing its row.
+            if (item.LastModifiedDateTime is { } modified && modified > cutoff.UtcDateTime)
             {
-                // Younger than the grace period: an upload may still be committing its row.
-                if (item.LastModified > cutoff.UtcDateTime)
-                {
-                    continue;
-                }
-
-                if (await IsOrphanAsync(item.Key, organizationId, branchId, cancellationToken))
-                {
-                    await client.DeleteObjectAsync(_options.Bucket, item.Key, cancellationToken);
-                    deleted++;
-                }
+                continue;
             }
 
-            request.ContinuationToken = page.NextContinuationToken;
+            if (await IsOrphanAsync(item.Key, organizationId, branchId, cancellationToken))
+            {
+                await client.RemoveObjectAsync(
+                    new RemoveObjectArgs().WithBucket(_options.Bucket).WithObject(item.Key),
+                    cancellationToken);
+
+                deleted++;
+            }
         }
-        while (page.IsTruncated ?? false);
 
         if (deleted > 0)
         {

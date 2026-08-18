@@ -77,11 +77,13 @@
 
   <ItemGroup Label="Storage">
     <!--
-      The AWS SDK rather than the MinIO client: the TZ specifies "S3-compatible storage (MinIO)", and
-      presigned URLs with response-header overrides — which SEC-017 needs to force
-      Content-Disposition per request — are first-class here.
+      The MinIO client rather than the AWS SDK. The TZ names MinIO as the storage, and the vendor's own
+      client is the one that tracks it: the AWS SDK's endpoint resolver builds presigned URLs over
+      https regardless of the configured scheme, which had to be corrected by rewriting the URL after
+      the fact. Response-header overrides — which SEC-017 needs to force Content-Disposition per
+      request — are signed here the same way, so nothing is lost by the swap.
     -->
-    <PackageVersion Include="AWSSDK.S3" Version="4.0.10" />
+    <PackageVersion Include="Minio" Version="7.0.0" />
   </ItemGroup>
 
   <ItemGroup Label="Testing">
