@@ -33,9 +33,14 @@ public sealed class StorageOptions
     [Required]
     public string Bucket { get; init; } = "mentortaskflow";
 
-    /// <summary>MinIO is path-style; virtual-host style requires DNS per bucket.</summary>
-    public bool UsePathStyle { get; init; } = true;
-
+    /// <summary>
+    /// Whether the endpoint is reached over TLS.
+    /// </summary>
+    /// <remarks>
+    /// Authoritative over any scheme written into <see cref="Endpoint"/>: the client is given a host
+    /// and a port, and the scheme comes from here. Path-style addressing has no setting because the
+    /// MinIO client does nothing else — virtual-host style would need DNS per bucket.
+    /// </remarks>
     public bool UseSsl { get; init; }
 
     /// <summary>Creates the bucket at startup when missing. Development and Test only.</summary>

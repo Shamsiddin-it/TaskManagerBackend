@@ -1,5 +1,3 @@
-using Amazon.S3;
-using Amazon.S3.Model;
 using MentorTaskFlow.Application.Common.Abstractions;
 using MentorTaskFlow.Application.Common.Exceptions;
 using MentorTaskFlow.Contracts.Common;
@@ -7,6 +5,9 @@ using MentorTaskFlow.Domain.Submissions;
 using MentorTaskFlow.Infrastructure.Options;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using Minio;
+using Minio.DataModel.Args;
+using Minio.Exceptions;
 
 namespace MentorTaskFlow.Infrastructure.Storage;
 
@@ -49,10 +50,17 @@ public static class SubmissionStorageKey
 }
 
 /// <inheritdoc />
-public sealed class S3FileStorage(
-    IAmazonS3 client,
+/// <remarks>
+/// Talks to MinIO through the vendor's own client rather than through the AWS SDK. The TZ names MinIO
+/// as the storage, and the difference showed: the AWS endpoint resolver builds presigned URLs over
+/// <c>https</c> whatever scheme <c>ServiceURL</c> carries, so every URL had to be rewritten afterwards
+/// to be usable against a plain-HTTP MinIO. Here the scheme comes from the client's own configuration
+/// and the workaround is gone.
+/// </remarks>
+public sealed class MinioFileStorage(
+    IMinioClient client,
     IOptions<StorageOptions> options,
-    ILogger<S3FileStorage> logger) : IFileStorage
+    ILogger<MinioFileStorage> logger) : IFileStorage
 {
     private readonly StorageOptions _options = options.Value;
 
@@ -61,19 +69,19 @@ public sealed class S3FileStorage(
         try
         {
             await client.PutObjectAsync(
-                new PutObjectRequest
-                {
-                    BucketName = _options.Bucket,
-                    Key = key,
-                    InputStream = content,
-                    ContentType = contentType,
+                new PutObjectArgs()
+                    .WithBucket(_options.Bucket)
+                    .WithObject(key)
+                    .WithStreamData(content)
 
-                    // The bucket denies anonymous reads (SEC-013); nothing here may widen that.
-                    DisablePayloadSigning = false,
-                },
+                    // The inspector spools the upload to a seekable temp file, so the length is known
+                    // and the object goes up in one part. -1 is the unknown-length path and is kept
+                    // only as a fallback: it buffers, which is what the spooling exists to avoid.
+                    .WithObjectSize(content.CanSeek ? content.Length : -1)
+                    .WithContentType(contentType),
                 cancellationToken);
         }
-        catch (AmazonS3Exception exception)
+        catch (Exception exception) when (exception is not OperationCanceledException)
         {
             // The object never landed, so no orphan is created and no database row will point at it.
             logger.LogError(exception, "Storage rejected an upload for key {Key}.", key);
@@ -92,8 +100,7 @@ public sealed class S3FileStorage(
         PresignAsync(
             key,
             contentType,
-            $"attachment; filename=\"{SanitiseFileName(downloadFileName)}\"",
-            cancellationToken);
+            $"attachment; filename=\"{SanitiseFileName(downloadFileName)}\"");
 
     public Task<Uri> GetPreviewUrlAsync(string key, string contentType, CancellationToken cancellationToken)
     {
@@ -101,17 +108,18 @@ public sealed class S3FileStorage(
         // has registered for the type, which defeats the sandboxed preview entirely.
         var disposition = contentType is "application/pdf" ? "inline" : "attachment";
 
-        return PresignAsync(key, contentType, disposition, cancellationToken);
+        return PresignAsync(key, contentType, disposition);
     }
 
     public async Task<bool> IsAvailableAsync(CancellationToken cancellationToken)
     {
         try
         {
-            await client.GetBucketLocationAsync(_options.Bucket, cancellationToken);
-            return true;
+            return await client.BucketExistsAsync(
+                new BucketExistsArgs().WithBucket(_options.Bucket),
+                cancellationToken);
         }
-        catch (AmazonS3Exception exception)
+        catch (Exception exception) when (exception is not OperationCanceledException)
         {
             logger.LogWarning(exception, "Storage health probe failed for bucket {Bucket}.", _options.Bucket);
             return false;
@@ -122,36 +130,39 @@ public sealed class S3FileStorage(
     /// Issues the short-lived URL that is the only way a file reaches a person (<c>SEC-013</c>).
     /// </summary>
     /// <remarks>
+    /// <para>
     /// The response headers are part of the signature, so a recipient cannot turn an <c>attachment</c>
     /// URL into an <c>inline</c> one by editing the query string. <c>X-Content-Type-Options</c> is set
     /// by the gateway in front of storage (<c>SEC-018</c>); the content type comes from the database
     /// row rather than from the object's stored metadata.
+    /// </para>
+    /// <para>
+    /// The overrides are the S3 <c>response-*</c> query parameters, which MinIO signs along with the
+    /// rest of the query string — the same mechanism the AWS SDK exposed as
+    /// <c>ResponseHeaderOverrides</c>, spelled as the wire protocol spells it.
+    /// </para>
     /// </remarks>
-    private async Task<Uri> PresignAsync(
-        string key,
-        string contentType,
-        string contentDisposition,
-        CancellationToken cancellationToken)
+    private async Task<Uri> PresignAsync(string key, string contentType, string contentDisposition)
     {
         try
         {
-            var url = await client.GetPreSignedURLAsync(new GetPreSignedUrlRequest
-            {
-                BucketName = _options.Bucket,
-                Key = key,
-                Verb = HttpVerb.GET,
-                Expires = DateTime.UtcNow.AddMinutes(_options.PresignedUrlMinutes),
-                ResponseHeaderOverrides = new ResponseHeaderOverrides
-                {
-                    ContentType = contentType,
-                    ContentDisposition = contentDisposition,
-                    CacheControl = "no-store",
-                },
-            });
+            var url = await client.PresignedGetObjectAsync(
+                new PresignedGetObjectArgs()
+                    .WithBucket(_options.Bucket)
+                    .WithObject(key)
+                    .WithExpiry(_options.PresignedUrlMinutes * 60)
+                    .WithHeaders(new Dictionary<string, string>(StringComparer.Ordinal)
+                    {
+                        ["response-content-type"] = contentType,
+                        ["response-content-disposition"] = contentDisposition,
 
-            return Normalise(url);
+                        // SEC-005: the response must not be cached anywhere on the way back.
+                        ["response-cache-control"] = "no-store",
+                    }));
+
+            return new Uri(url);
         }
-        catch (AmazonS3Exception exception)
+        catch (Exception exception) when (exception is not OperationCanceledException)
         {
             // Never log the URL itself: it is a bearer credential for the next ten minutes (SEC-020).
             logger.LogError(exception, "Failed to presign an object in bucket {Bucket}.", _options.Bucket);
@@ -160,29 +171,6 @@ public sealed class S3FileStorage(
                 ErrorCodes.StorageUnavailable,
                 "Хранилище файлов временно недоступно. Повторите попытку позже.");
         }
-    }
-
-    /// <summary>
-    /// Forces the URL onto the scheme the endpoint is actually configured with.
-    /// </summary>
-    /// <remarks>
-    /// The AWS SDK's endpoint resolver builds presigned URLs over <c>https</c> regardless of the scheme
-    /// of <c>ServiceURL</c>, which points at a plain-HTTP MinIO in development and in the test
-    /// environment; a client following such a URL fails with a TLS framing error rather than anything
-    /// diagnosable. Rewriting the scheme is safe: SigV4 signs the host, the path, the query and the
-    /// signed headers — the scheme is not among them, so the signature stays valid.
-    /// </remarks>
-    private Uri Normalise(string url)
-    {
-        var builder = new UriBuilder(url)
-        {
-            Scheme = _options.UseSsl ? Uri.UriSchemeHttps : Uri.UriSchemeHttp,
-        };
-
-        // UriBuilder substitutes the default port for the new scheme; the endpoint's own port must win.
-        builder.Port = new Uri(url).Port;
-
-        return builder.Uri;
     }
 
     /// <summary>
@@ -195,7 +183,7 @@ public sealed class S3FileStorage(
     internal static string SanitiseFileName(string fileName)
     {
         var cleaned = new string([.. fileName
-            .Where(c => !char.IsControl(c) && c is not ('"' or '\\' or '/' or '\r' or '\n')),
+            .Where(c => !char.IsControl(c) && c is not ('"' or '\\' or '/')),
         ]).Trim();
 
         return cleaned.Length == 0 ? "submission" : cleaned;

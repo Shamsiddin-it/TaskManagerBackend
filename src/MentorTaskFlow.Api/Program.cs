@@ -1,5 +1,3 @@
-using Amazon.S3;
-using Amazon.S3.Model;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -10,6 +8,8 @@ using MentorTaskFlow.Api.HealthChecks;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using MentorTaskFlow.Api.Middleware;
 using MentorTaskFlow.Infrastructure.Observability;
+using Minio;
+using Minio.DataModel.Args;
 using Prometheus;
 using MentorTaskFlow.Api.Options;
 using MentorTaskFlow.Api.Tenancy;
@@ -230,11 +230,11 @@ if (app.Services.GetRequiredService<IOptions<DatabaseOptions>>().Value.MigrateOn
 // ---------------------------------------------------------------------------
 if (app.Services.GetRequiredService<IOptions<StorageOptions>>().Value is { EnsureBucketOnStartup: true } storage)
 {
-    var s3 = app.Services.GetRequiredService<IAmazonS3>();
+    var minio = app.Services.GetRequiredService<IMinioClient>();
 
-    if (!await Amazon.S3.Util.AmazonS3Util.DoesS3BucketExistV2Async(s3, storage.Bucket))
+    if (!await minio.BucketExistsAsync(new BucketExistsArgs().WithBucket(storage.Bucket)))
     {
-        await s3.PutBucketAsync(new PutBucketRequest { BucketName = storage.Bucket });
+        await minio.MakeBucketAsync(new MakeBucketArgs().WithBucket(storage.Bucket));
     }
 }
 

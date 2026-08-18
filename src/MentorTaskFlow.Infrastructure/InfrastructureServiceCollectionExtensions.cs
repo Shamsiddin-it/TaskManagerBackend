@@ -1,8 +1,7 @@
-using Amazon.Runtime;
 using Hangfire;
 using Hangfire.PostgreSql;
-using Amazon.S3;
 using Anthropic;
+using Minio;
 using MentorTaskFlow.Application.Common.Abstractions;
 using MentorTaskFlow.Application.Common.Security;
 using MentorTaskFlow.Application.Common.Tenancy;
@@ -301,27 +300,23 @@ public static class InfrastructureServiceCollectionExtensions
 
         // Built from the provider rather than from a captured snapshot, for the same reason the
         // DbContext is: credentials arrive from the environment and may be registered after this call.
-        services.AddSingleton<IAmazonS3>(serviceProvider =>
+        services.AddSingleton<IMinioClient>(serviceProvider =>
         {
             var options = serviceProvider.GetRequiredService<IOptions<StorageOptions>>().Value;
+            var endpoint = StorageEndpoint.Parse(options.Endpoint);
 
-            return new AmazonS3Client(
-                new BasicAWSCredentials(options.AccessKey, options.SecretKey),
-                new AmazonS3Config
-                {
-                    ServiceURL = options.Endpoint,
+            return new MinioClient()
+                .WithEndpoint(endpoint.Host, endpoint.Port)
+                .WithCredentials(options.AccessKey, options.SecretKey)
 
-                    // MinIO addresses buckets by path; virtual-host style would need DNS per bucket.
-                    ForcePathStyle = options.UsePathStyle,
-                    UseHttp = !options.UseSsl,
-
-                    // MinIO is not a region-based service, but the SDK requires the field to be set
-                    // before it will sign a request at all.
-                    AuthenticationRegion = "us-east-1",
-                });
+                // UseSsl is authoritative, as it was for the AWS client: a scheme written into the
+                // endpoint and a flag saying the opposite is a configuration error, and picking the
+                // stricter of the two silently would break a plain-HTTP MinIO in development.
+                .WithSSL(options.UseSsl)
+                .Build();
         });
 
-        services.AddScoped<IFileStorage, S3FileStorage>();
+        services.AddScoped<IFileStorage, MinioFileStorage>();
         services.AddSingleton<UploadedFileInspector>();
         services.AddScoped<ISubmissionService, SubmissionService>();
         services.AddScoped<IReviewService, ReviewService>();
