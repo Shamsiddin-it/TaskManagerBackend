@@ -81,15 +81,27 @@ jobs:
       # machine-readable companion to Приложение D; a divergence between them is a defect.
       #
       # `swagger tofile` boots the real host to read the document, so startup validation applies:
-      # AuthOptionsValidator refuses to start without a signing key (DEPLOY-015). The values below
-      # are throwaways that exist only to get the host to Start — no token is ever issued and no
-      # database is contacted — and the key is shaped to pass the validator's placeholder check
-      # rather than to be secret. Real secrets come from the secret manager (SEC-010).
+      # every option group registered with ValidateOnStart must satisfy its [Required] members
+      # before the document can be printed (DEPLOY-015). The values below are throwaways that exist
+      # only to get the host to Start — no token is issued, no database is contacted, no bucket and
+      # no mail server are reached — and the signing key is shaped to pass the validator's
+      # placeholder check rather than to be secret. Real secrets come from the secret manager
+      # (SEC-010).
+      #
+      # Adding a new [Required] option means adding it here too, or this job stops producing the
+      # specification. That is the intended trade: DEPLOY-015 says a missing setting must fail at
+      # startup, and the alternative — relaxing the requirement so a CI job is happy — would let a
+      # deployment boot without it.
       - name: Generate OpenAPI specification
         env:
           Auth__JwtSigningKey: openapi-generation-only-0123456789-abcdefghijklmnopqrstuvwxyz
           Auth__AppBaseUrl: https://app.invalid
           ConnectionStrings__DefaultConnection: "Host=127.0.0.1;Port=1;Database=openapi;Username=none;Password=none"
+          # Port 1: reachable configuration, unreachable server. Nothing here is ever dialled.
+          Storage__Endpoint: "http://127.0.0.1:1"
+          Storage__AccessKey: openapi-generation-only
+          Storage__SecretKey: openapi-generation-only
+          Notifications__SmtpHost: 127.0.0.1
         run: |
           dotnet tool install --global Swashbuckle.AspNetCore.Cli --version 10.2.3
           dotnet build src/MentorTaskFlow.Api/MentorTaskFlow.Api.csproj --configuration Release
